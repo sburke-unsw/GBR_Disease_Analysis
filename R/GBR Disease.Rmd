@@ -1,0 +1,2439 @@
+---
+title: "GBR Disease"
+author: "Samantha Burke"
+date: "2024-01-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Preliminary Analysis
+# Load Packages and Data
+```{r}
+# Load in packages and database
+library(readxl)
+library(visdat)
+library(maps)
+library(here)
+library(lubridate)
+library(patchwork)
+library(viridis)
+library(stringr)
+library(corrplot)
+library(lme4)
+library(here)
+library(rstan)
+library(modelr)
+library(tidyverse)    # ggplot, dplyr, %>%, and friends
+library(brms)         # Bayesian modeling through Stan
+library(tidybayes)    # Manipulate Stan objects in a tidy way
+library(broom)        # Convert model objects to data frames
+library(broom.mixed)  # Convert brms model objects to data frames
+library(emmeans)      # Calculate marginal effects in even fancier ways
+library(patchwork)    # Combine ggplot objects
+library(ggokabeito)   # Neat accessible color palette
+library(gghalves)     # Special half geoms
+library(ggbeeswarm)   # Special distribution-shaped point jittering
+library(ggdist)
+library(ncdf4)
+library(RCurl)
+library(curl)
+library(XML)
+library(progress)
+library(lubridate)
+library(birk)
+
+cover <- read.csv(here("data", "ltmp_hc_sc_a_by_site.csv"))           # site level cover from Michelle Jonker (need the coordinates here)
+load(here("Rdata", "hc.gen.morph.transect.RData"))                    # hard coral cover per transect by genus from Michelle Jonker
+coralgen <- ltmp.hard.coral.trans                                       #rename
+load(here("Rdata", "ltmp.dead.coral.transect.RData"))                 # dead coral cover per transect from Michelle Jonker
+deadcover <- ltmp.dead.coral.trans                                      #rename
+load(here("Rdata", "ltmp.group.cover.transect.RData"))                # transect level cover from Michelle Jonker
+groupcover <- ltmp.group.cover.transect                                 #rename
+load(here("Rdata", "codes.RData"))                                    # codes for identifying column names in coralgen dataset from Michelle Jonker
+forbleach <- read.csv(here("data", "Disease for Samantha Burke UNSW_Jan2023.csv"))   # disease incidence from Michelle Jan 2023
+gbr <- read.csv(here("data", "Disease for Samantha Burke UNSW_Feb2023.csv"))   # disease incidence from Michelle Feb 2023
+load(here("Rdata", "disease.fam.genus.lifeform.transect20230202.RData"))       # disease data per coral type from Michelle Feb 2023
+bytaxa <- dis.genus.zeros                                                        # rename
+load(here("Rdata", "ltmp.group.cover.transect.31052023.RData"))         # transect level cover from Michelle May 2023
+groupcover2 <- ltmp.group.cover.transect 
+load(here("Rdata", "ltmp.group.cover.transect.01062023.RData"))         # transect level cover from Michelle May 2023
+groupcover3 <- ltmp.group.cover.transect 
+load(here("Rdata", "disease.fam.genus.lifeform.transect20230621.RData"))   # data with observer from Michelle June 2023
+bytaxa2 <- dis.genus.zeros 
+
+## Data with Temperature Metrics
+tempdata <- readRDS(here("Rdata", "CombinedData_TempVars v5.RDS"))
+
+## FULL DATA
+fulldata <- readRDS(here("Rdata", "Final Dataset.rds"))
+
+```
+
+## Clean and Combine Data
+```{r clean main data}
+gbr <- full_join(gbr, forbleach)
+gbr <- gbr %>% select(SAMPLE_ID,  A_SECTOR, SHELF,  SAMPLE_DATE,  AIMS_REEF_NAME, REEF_NAME,  FULLREEF_ID,  REPORT_YEAR,  VISIT_NO, REEF_LAT, REEF_LONG,  OPENORCLOSED, OPENORCLOSED_AFTER2004, MP_ZONE,  NEW_ZONE_2004,  SITE_NO,  TRANSECT_NO, BLEACHING_PERHC, WHITESYNDROME, SEB_DISEASE, BROWNB_DISEASE, BLACKBAND, AN, U_SCAR)
+
+gbr$Site_ID <- paste(gbr$FULLREEF_ID, gbr$SITE_NO, sep = "_")
+
+gbr$Trans_ID <- paste(gbr$Site_ID, gbr$TRANSECT_NO, sep = "_")
+
+col_titles <- colnames(gbr)
+
+gbr_WS <- subset(gbr, gbr$WHITESYNDROME > 0)
+gbr_WS$WS <- print(1)
+gbr2 <- left_join(gbr, gbr_WS, by = col_titles)
+gbr2$WS[is.na(gbr2$WS)] <- 0
+
+gbr_SEB <- subset(gbr2, gbr2$SEB_DISEASE > 0)
+gbr_SEB$SEB <- print(1)
+gbr2 <- full_join(gbr2, gbr_SEB, by = c(col_titles, "WS"))
+gbr2$SEB[is.na(gbr2$SEB)] <- 0
+
+gbr_Br <- subset(gbr2, gbr2$BROWNB_DISEASE > 0)
+gbr_Br$Br <- print(1)
+gbr2 <- full_join(gbr2, gbr_Br, by = c(col_titles, "WS", "SEB"))
+gbr2$Br[is.na(gbr2$Br)] <- 0
+
+gbr_BlB <- subset(gbr2, gbr2$BLACKBAND > 0)
+gbr_BlB$BlB <- print(1)
+gbr2 <- full_join(gbr2, gbr_BlB, by = c(col_titles, "WS", "SEB", "Br"))
+gbr2$BlB[is.na(gbr2$BlB)] <- 0
+
+gbr_Atr <- subset(gbr2, gbr2$AN > 0)
+gbr_Atr$Atr <- print(1)
+gbr2 <- full_join(gbr2, gbr_Atr, by = c(col_titles, "WS", "SEB", "Br", "BlB"))
+gbr2$Atr[is.na(gbr2$Atr)] <- 0
+
+gbr_US <- subset(gbr2, gbr2$U_SCAR > 0)
+gbr_US$US <- print(1)
+gbr2 <- full_join(gbr2, gbr_US, by = c(col_titles, "WS", "SEB", "Br", "BlB", "Atr"))
+gbr2$US[is.na(gbr2$US)] <- 0
+
+#View(gbr2)
+
+# now sum disease presence/absence for disease number of that effect size
+gbr2$Dis_Num <- rowSums(gbr2[, 27:32], na.rm=TRUE)
+
+# rename columns
+colnames(gbr2) <- c("Sample_ID", "Lat_Sector", "Shelf", "Date", "AIMS_Reef_Name", "Reef_Name", "Reef_ID", "Report_Year", "Visit", "Reef_Lat", "Reef_Lon", "Fishing_Pre2004", "Fishing_Post2004", "Zone_Pre2004", "Zone_Post2004", "Site", "Transect", "Bleaching", 
+                    "WS_Incidence", "SEB_Incidence", "BrownB_Incidence", "BlackB_Incidence", "AN_Incidence", "Scar_Incidence", "Site_ID", "Trans_ID", "WS_Presence", "SEB_Presence", "BrownB_Presence", "BlackB_Presence", "AN_Presence", "Scar_Presence", "Disease_Num")
+gbr2$AIMS_Reef_Name <- as.factor(gbr2$AIMS_Reef_Name)
+gbr2$Date <- dmy(gbr2$Date)
+gbr2$Sample_Year <- year(gbr2$Date)
+# saveRDS(gbr2, here("Rdata", "Main Data.rds"))
+
+```
+
+```{r merge genus data}
+# bytaxa into wide format of disease by morphology ----
+# combine disease by morphology to data
+morph_group <- function(LIFEFORM) {
+  case_when(
+    LIFEFORM == "ACBX" | LIFEFORM == "ACD" | LIFEFORM == "CB"   ~ "Branch",
+    LIFEFORM == "ACBES" | LIFEFORM == "CEMS" | LIFEFORM == "CM" | LIFEFORM == "CMR" | LIFEFORM == "CBEMS" | LIFEFORM == "CMCS" | LIFEFORM == "CEFS" | LIFEFORM == "CEFMS" | LIFEFORM == "CBE" | LIFEFORM == "CS" | LIFEFORM == "CMS"  ~ "Dome",
+    LIFEFORM == "ACTO" ~ "Plate",
+    LIFEFORM == "CBEFMS" | LIFEFORM == "CF" | LIFEFORM == "CEF" | LIFEFORM == "CBEF" | LIFEFORM == "ACES"  ~ "Other"
+  )
+}
+
+
+# Create a new column for morphology in dataframe
+bytaxa$Morph <- morph_group(bytaxa$LIFEFORM)
+
+# Rename DAMAGE to match disease cols in other data
+unique(bytaxa$DAMAGE)
+damage_group <- function(DAMAGE) {
+  case_when(
+    DAMAGE == "WS"        ~ "WS",
+    DAMAGE == "SEB"       ~ "SEB",
+    DAMAGE == "BrB"       ~ "BrownB",
+    DAMAGE == "BBD"       ~ "BlackB",
+    DAMAGE == "AN"        ~ "AN",
+    DAMAGE == "UNK"       ~ "Scar"
+  )
+}
+# Create a new column for damage in dataframe
+bytaxa$Damage <- damage_group(bytaxa$DAMAGE)
+
+bytaxa.short <- select(bytaxa, c("AIMS_REEF_NAME", "REPORT_YEAR", "VISIT_NO", "SITE_NO", "TRANSECT_NO", "count", "Morph", "Damage"))
+bytaxa.short <- bytaxa.short[c(-1)]
+
+summed.morph <- bytaxa.short %>% group_by(AIMS_REEF_NAME, REPORT_YEAR, VISIT_NO, SITE_NO, TRANSECT_NO, Morph, Damage) %>% summarise(n = sum(count))
+summed.morph$DisMorph <- paste0(summed.morph$Damage, "_", summed.morph$Morph)
+short.sum <- select(summed.morph, c("AIMS_REEF_NAME", "REPORT_YEAR", "VISIT_NO", "SITE_NO", "TRANSECT_NO", "n", "DisMorph"))
+short.sum <- short.sum[c(-1)]
+
+# transform to a wide format
+bytaxa.wide <- short.sum %>% 
+  pivot_wider(
+    names_from = DisMorph,
+    values_from = n
+  )
+
+#rename columns
+colnames(bytaxa.wide) <- c("AIMS_Reef_Name", "Report_Year", "Visit", "Site", "Transect", "AN_Branch", "BlackB_Branch",
+                           "BrownB_Branch", "Scar_Branch",  "SEB_Branch", "WS_Branch", "AN_Dome",
+                           "BlackB_Dome",  "BrownB_Dome",  "Scar_Dome",  "SEB_Dome", "WS_Dome",
+                           "AN_Other", "BlackB_Other", "BrownB_Other", "Scar_Other", "SEB_Other",
+                           "WS_Other", "AN_Plate", "BlackB_Plate", "BrownB_Plate", "Scar_Plate",
+                           "SEB_Plate",  "WS_Plate")
+bytaxa.wide$AIMS_Reef_Name <- as.factor(bytaxa.wide$AIMS_Reef_Name)
+
+# merge and check ----
+new_data <- left_join(gbr2, bytaxa.wide, by = c("AIMS_Reef_Name", "Report_Year", "Visit", "Site", "Transect"))
+```
+
+```{r merge transect-level benthos cover}
+# rename columns
+colnames(groupcover) <- c("AIMS_Reef_Name", "Visit", "Site", "Transect", "Date", "Algae_Cover", "Abiotic_Cover", "HardCoral_Cover", "SoftCoral_Cover", "AllCoral_Cover")
+# get Year as lubridate
+groupcover$Date <- ymd(groupcover$Date)
+groupcover$Sample_Year <- year(groupcover$Date)
+
+# rename dead cover data columns
+colnames(deadcover) <- c("AIMS_Reef_Name", "Visit", "Site", "Transect", "Date", "Dead_Cover")
+# get Year as lubridate
+deadcover$Date <- ymd(deadcover$Date)
+deadcover$Sample_Year <- year(deadcover$Date)
+
+# merge transect-level coverage
+trans.cover <- left_join(groupcover, deadcover, by = c("AIMS_Reef_Name", "Visit", "Site", "Transect", "Date", "Sample_Year"))
+
+# merge transect-level coverage to gbr_cover
+gbr_trans.cover <- left_join(new_data, trans.cover, by = c("Date", "AIMS_Reef_Name", "Visit", "Sample_Year", "Site", "Transect"))
+```
+
+```{r merge cover by genus data}
+# rename columns
+colnames(coralgen) <- c("AIMS_Reef_Name", "Visit", "Site", "Transect", "Date", "ACBX_Cover", "ACD_Cover", "ACSE_Cover", "ACTO_Cover", "COR_CBCF_Cover", "COR_CE_Cover", "COR_CL_Cover", "COR_CMCS_Cover", "F_AGA_CEMS_Cover", "F_AGA_CF_Cover", "F_EUPH_PLU_Cover", "F_FUN_CECF_Cover", "F_FUN_CMR_Cover", "F_MER_CEMS_Cover", "F_MER_PLE_PLOC_Cover", "F_SID_COS_PSA_Cover", "G_ACA_MIC_HOM_Cover", "G_AST_Cover", "G_DIP_Cover", "G_ECH_CB_Cover", "G_ECH_OTH_Cover", "G_GAL_Cover", "G_GON_ALV_BER_Cover", "G_HYD_CB_Cover", "G_HYD_OTH_Cover", "G_ISO_B_Cover", "G_ISO_CSE_Cover", "G_LEP_Cover", "G_LOB_AUST_Cover", "G_MER_Cover", "G_MON_Cover", "G_MOS_Cover", "G_MYC_Cover", "G_OXY_ECL_ECY_Cover", "G_PAC_Cover", "G_PEC_Cover", "G_POC_Cover", "G_POR_B_Cover", "G_POR_CECS_Cover", "G_POR_M_Cover", "G_SER_Cover", "G_STY_Cover", "G_TUB_HET_Cover", "G_TUR_DUN_Cover", "S_POR_RUS_Cover")
+# get year as lubridate
+coralgen$Date <- ymd(coralgen$Date)
+coralgen$Sample_Year <- year(coralgen$Date)
+
+# merge to gbr_trans.cover
+gbr_all.trans <- left_join(gbr_trans.cover, coralgen, by = c("AIMS_Reef_Name", "Visit", "Sample_Year", "Site", "Transect", "Date"))
+
+# calculate cover by 4 morphology categories
+gbr_all.trans <- gbr_all.trans %>% mutate(Branch_Cover = rowSums(across(c(ACBX_Cover, ACD_Cover, COR_CBCF_Cover, G_ECH_CB_Cover, G_HYD_CB_Cover, G_ISO_B_Cover, G_POR_B_Cover, G_SER_Cover))))
+gbr_all.trans <- gbr_all.trans %>% mutate(Dome_Cover = rowSums(across(c(ACSE_Cover, COR_CE_Cover, COR_CMCS_Cover, F_AGA_CEMS_Cover, F_EUPH_PLU_Cover, F_MER_CEMS_Cover, F_MER_PLE_PLOC_Cover, F_SID_COS_PSA_Cover, G_ACA_MIC_HOM_Cover, G_AST_Cover, G_DIP_Cover, G_ECH_OTH_Cover, G_GAL_Cover, G_GON_ALV_BER_Cover, G_HYD_OTH_Cover, G_ISO_CSE_Cover, G_LEP_Cover, G_LOB_AUST_Cover, G_MER_Cover, G_MON_Cover, G_MOS_Cover, G_OXY_ECL_ECY_Cover, G_PEC_Cover, G_POC_Cover, G_POR_CECS_Cover, G_POR_M_Cover, G_STY_Cover, S_POR_RUS_Cover))))
+gbr_all.trans$Plate_Cover <- gbr_all.trans$ACTO_Cover   # only has one column from the data. Merge with Other?
+gbr_all.trans <- gbr_all.trans %>% mutate(Other_Cover = rowSums(across(c(COR_CL_Cover, F_AGA_CF_Cover, F_FUN_CECF_Cover, F_FUN_CMR_Cover, G_MYC_Cover, G_PAC_Cover, G_TUB_HET_Cover, G_TUR_DUN_Cover))))
+```
+
+
+```{r merge site-level cover data}
+# only need hard coral
+coral_cover <- subset(cover, GROUP_CODE == "Hard Coral")
+# rename columns
+colnames(coral_cover) <- c("Lat_Sector", "Shelf", "Reef_Name", "Reef_ID", "Site", "Site_Lat", "Site_Lon", "Visit", "Year_Code", "Date", "Cover_Type", "Site_Cover")
+
+# change date column to date format
+coral_cover$Date <- ymd(coral_cover$Date)
+# get just the year
+coral_cover$Sample_Year <- year(coral_cover$Date)
+
+# merge with disease data
+combined_data <- left_join(gbr_all.trans, coral_cover, by = c("Lat_Sector", "Shelf", "Reef_Name", "Reef_ID", "Site", "Visit", "Sample_Year", "Date"))
+```
+
+```{r check Bleaching values}
+unique(combined_data$Bleaching)
+# found instances of "0+_" which is most likely a typo of "0+"
+
+# replace with "0+"
+combined_data$Bleaching <- gsub("0\\+_", "0\\+", combined_data$Bleaching)
+```
+
+```{r check Bleaching values}
+summary(combined_data$Date)
+# found instances of "2227" year
+# Report year says 2023, so this is most likely 2022-10-27
+
+# replace with 2022
+combined_data$Date <- ymd(gsub("2227-10-27", "2022-10-27", combined_data$Date))
+combined_data$Sample_Year <- year(combined_data$Date)
+```
+
+```{r check missing values}
+vis_miss(combined_data, warn_large_data = FALSE)
+
+# Save dataset
+#saveRDS(combined_data, here("Rdata", "Data Without Temperature v3.rds"))
+#write.csv(combined_data, here("data", "Data Without Temperature v3.csv"))
+
+#data <- combined_data
+```
+
+# Incorporating Temperature Data
+## Matching temperature data with reef data
+
+```{r}
+#CombinedData <- readRDS(here("Rdata", "Data Without Temperature v3.rds"))
+CombinedData <- combined_data
+
+str(CombinedData)
+summary(CombinedData$Date)
+class(CombinedData$Date)
+
+summary(CombinedData$Reef_Lat)
+summary(CombinedData$Reef_Lon)
+summary(CombinedData$Date)
+
+# fix inconsistent date
+# fix obsolete + data now has 2023 entries
+# CombinedData[which(CombinedData$Report_Year == 2023), "Report_Year"] <- NA
+
+# filtering out cases without dates
+CombinedData <- filter(CombinedData, !is.na(Report_Year))
+nrow(CombinedData)
+```
+
+First, let's check the structure of a sample NC file.
+
+```{r, eval=FALSE}
+# temperature data on external drive as it's too large to have on GitHub
+#  Data extracted from Copernicus: "Sea surface temperature daily data from 1981 to present derived from satellite observations" Lopez, 2019
+# tempdir <- "/Volumes/Extreme SSD/science/DATA/NOAA_data/dhw/"
+tempdir <- "D:/Sam's Lenovo/Documents/sst/"
+
+allfiles <- list.files(tempdir)
+nc_sample <- nc_open(paste0(tempdir, allfiles[1]))
+
+nc_sample
+# variable of interest: degree_heating_week
+# lon: grid of 7200 degrees east (like GBR) every 0.025 degree
+# lat: grid of 3600 degrees north (like GBR) every 0.025 degree
+# time: seconds since 1981-01-01 00:00:00 (not relevant here)
+
+lons <- round(ncvar_get(nc_sample, 'lon'), 3)
+lats <- round(ncvar_get(nc_sample, 'lat'), 3)
+nc_close(nc_sample)
+
+# create a "core" of a file name that will just take a date to load
+
+namecore <- paste0(tempdir, "ct5km_dhw_v3.1_")
+```
+
+Let's extract three relevant variables and make them into usable indices:
+
+```{r, eval=FALSE}
+index_vars <- CombinedData[, c("Date", "Reef_Lon", "Reef_Lat")]
+index_vars$Date <- as.character(index_vars$Date)
+index_vars$Date_ch <- sapply(index_vars$Date,
+                             function(x) {
+                               if(!is.na(x)) {
+                                 paste(unlist(strsplit(x, split = "-")), collapse = "")
+                               } else NA
+                             }
+)
+
+lon_index <- which(lons == round(floor(CombinedData[1,'Reef_Lon']/0.05)*0.05 + 0.025, 3))
+lat_index <- which(lats == round(floor(CombinedData[1,'Reef_Lat']/0.05)*0.05 + 0.025, 3))
+
+index_vars$lonindex <- sapply(index_vars$Reef_Lon,
+                              function(x) {
+                                if(!is.na(x)) {
+                                  which(lons == round(floor(x/0.05)*0.05 + 0.025, 3))
+                                } else NA
+                              })
+
+index_vars$latindex <- sapply(index_vars$Reef_Lat,
+                              function(x) {
+                                if(!is.na(x)) {
+                                  which(lats == round(floor(x/0.05)*0.05 + 0.025, 3))
+                                } else NA
+                              })
+
+head(index_vars, 100)
+```
+
+In a loop, we open relevant NC file, extract relevant temperature stress according to coordinates and return the value:
+
+```{r, eval=FALSE}
+# test - not run in most cases
+# if(!any(is.na(index_vars[1,]))) {
+#   filename <- paste0(namecore, index_vars[1, "Date_ch"], ".nc")
+#   nc <- nc_open(filename)
+#   hsa <- ncvar_get(nc = nc,
+#                    varid = "degree_heating_week")[index_vars[1, "lonindex"],
+#                                                   index_vars[1, "latindex"]]
+#   hsa
+# } else NA
+
+namedeparse <- function(month) {
+  deparse(match.call()$month)
+}
+
+allfiles <- paste0(tempdir, allfiles)
+
+parse_nc <- function(date, latix, lonix, namecore, allfiles) {
+    # cat(".\n")
+    if (!(is.na(date) | is.na(latix) | is.na(lonix))) {
+        filename <- paste0(namecore, date, ".nc")
+
+        if (filename %in% allfiles) {
+            # cat(".\n")
+            nc <- try(nc_open(filename), TRUE)
+            # cat(".\n")
+            if (exists(namedeparse(nc))) {
+                hsa <- ncvar_get(
+                    nc = nc,
+                    varid = "degree_heating_week"
+                )[
+                    lonix,
+                    latix
+                ]
+                # cat(".\n")
+                pb$tick()
+                return(hsa)
+            } else {
+                return(NA)
+            }
+        } else {
+            return(NA)
+        }
+    } else {
+        return(NA)
+    }
+    # cat(".\n")
+}
+
+# only test
+# parse_nc <- function(date, latix, lonix, namecore) {
+#   if(!(is.na(date) | is.na(latix) | is.na(lonix))) return(1)
+# }
+
+# turn into function
+
+pb <- progress_bar$new(
+    format = "[:bar] :current/:total (:percent) elapsed :elapsed eta :eta",
+    total = nrow(index_vars)
+)
+index_vars <- index_vars %>%
+    rowwise() %>%
+    mutate(dhw_extracted = parse_nc(Date_ch, latindex, lonindex,
+        namecore = namecore, allfiles = allfiles
+    ))
+
+saveRDS(index_vars, file = here("Rdata", "230503_temp_dhw_extract.rds"))
+```
+
+
+## Extraction of some basic climate variables from a large collection of NC files with SST.
+
+The data is hosted on a local harddrive:
+
+### (not needed - only test) checks of the monthly mean max data
+
+```{r, eval=FALSE}
+nc_mmm <- nc_open(here("data", 'ct5km_climatology_v3.1.nc'))
+print(nc_mmm)
+ncvar_get(nc_mmm, 'sst_clim_mmm', start = c(400,550,1), count = c(1,50,1))
+ncvar_get(nc_mmm, 'lon')[1:10]
+ncvar_get(nc_mmm, 'lat')[1:10]
+nc_close(nc_mmm)
+```
+
+### (not needed - only test) try loading and checking one day of sst data
+
+```{r, eval=FALSE}
+# use here link to your own directory witah daily sst files
+# sstdir <- "/Volumes/Warehouse/DATA/sst/sst/"
+sstdir <- "D:/Sam's Lenovo/Documents/sst/"
+allfiles <- list.files(sstdir)
+
+nc_sst_day <- nc_open(paste0(sstdir, allfiles[1]))
+print(nc_sst_day)
+ncvar_get(nc_sst_day, 'analysed_sst', start = c(400,550,1), count = c(1,50,1))
+ncvar_get(nc_sst_day, 'lon')[1:10]
+ncvar_get(nc_sst_day, 'lat')[1:10]
+```
+
+### Work with NC files to create a weekly one
+
+First define dimensions
+
+```{r, eval=FALSE}
+lonvar <- ncvar_get(nc_sst_day, "lon")
+latvar <- ncvar_get(nc_sst_day, "lat")
+londim <- ncdim_def("longitude", "degrees_east", lonvar)
+latdim <- ncdim_def("latitude", "degrees_north", latvar)
+timedim <- ncdim_def("time", "seconds from 1981-1-1", 1, unlim = T)
+```
+
+Now define variables and create file.
+
+```{r, eval=FALSE}
+sstvar <- ncvar_def("sst", "kelvin", dim = list(londim, latdim, timedim), prec = "float")
+
+# create file
+sstdata <- nc_create("D:/Sam's Lenovo/Documents/sst/sst_2000_2022.nc", list(sstvar))  # this file will be quite large, make sure you have over 120GB of space prior to running the below code
+
+```
+
+Subset the file list to exclude files prior to 2000 (not needed).
+
+```{r, eval=FALSE}
+excl_years <- grep("^19", allfiles)
+allfiles00_22 <- allfiles[-excl_years]
+
+for(yr in 2000:2022) {
+  nfiles <- length(
+    allfiles00_22[grep(paste0("^", yr), allfiles00_22)]
+  )
+
+  cat(nfiles); cat("\n")
+}
+```
+
+Loop over files and fill new NC file
+
+```{r, eval=FALSE}
+i <- 1 # day counter
+j <- 1 # weeks counter
+for (current_file in allfiles00_22) {
+  
+  # open the given sst data in the loop
+  nc_temp <- nc_open(paste0(sstdir, current_file))
+  sst_temp <- ncvar_get(nc_temp, 'analysed_sst')
+  
+  if(i == 1) {
+    time_temp <- ncvar_get(nc_temp, 'time')
+    sst_avg <- (1/7)*sst_temp
+  } else {
+    sst_avg <- sst_avg + (1/7)*sst_temp
+  }
+  
+  rm(sst_temp)
+  nc_close(nc_temp)
+  
+  if (i == 7) {
+
+    # open file to write
+    sstdata <- nc_open("D:/Sam's Lenovo/Documents/sst/sst_2000_2022.nc", write = T)
+
+    # write data
+    ncvar_put(sstdata, "sst", sst_avg, start = c(1, 1, j), count = c(-1, -1, 1))
+
+    # update the time variable with the new day
+    ncvar_put(sstdata, "time", time_temp, start = j, count = 1)
+
+    # close connection before the next iteration and cleanup data
+    nc_close(sstdata)
+    rm(sst_avg)
+    i <- 1
+    j <- j + 1
+
+  } else {
+
+    i <- i + 1
+
+  }
+  
+  cat("File "); cat(current_file); cat(" done \n")
+}
+```
+
+
+### Work out the wHSA and wCSA
+
+We will use the intermediate object created when extracting temperature.
+
+First, extract and add monthly averages maxima:
+
+```{r, eval=FALSE}
+
+# finalised file saved to disk - reload below
+# data_temp <- readRDS(here("Rdata", "temp_dhw_extract.rds"))
+data_temp <- index_vars
+
+
+pb <- progress_bar$new(
+    format = "[:bar] :current/:total (:percent) elapsed :elapsed eta :eta",
+    total = nrow(data_temp)
+)
+
+mmm <- nc_open(here("data",'ct5km_climatology_v3.1.nc'))
+lons <- round(ncvar_get(mmm, 'lon'), 3)
+lats <- round(ncvar_get(mmm, 'lat'), 3)
+
+data_temp$MaxMM <- NA
+
+# loop over data to fill MMM climatology values
+for (i in 1:nrow(data_temp)) {
+  
+  if(year(data_temp$Date[i]) >= 2000 & !is.na(data_temp$Date[i])) {
+    
+    # rounding strategy to get correct rounding resolution
+    lon_index <- which(lons == round(floor(data_temp$Reef_Lon[i]/0.05)*0.05 + 0.025, 3))
+    lat_index <- which(lats == round(floor(data_temp$Reef_Lat[i]/0.05)*0.05 + 0.025, 3))
+    
+    # adding 273.15 turns Celsius into Kelvin
+    mmm_val <- ncvar_get(mmm, 'sst_clim_mmm', 
+                         start = c(lon_index, lat_index, 1),
+                         count = c(1,1,1)) + 273.15
+    
+    data_temp[i, 'MaxMM'] <- mmm_val
+  }
+  
+  # cat('Entry '); cat(i); cat(' done\n')
+  pb$tick()
+  
+}
+
+nc_close(mmm)
+
+```
+
+
+### Calculate weekly HSA
+
+```{r, eval=FALSE}
+pb <- progress_bar$new(
+    format = "[:bar] :current/:total (:percent) elapsed :elapsed eta :eta",
+    total = nrow(data_temp)
+)
+
+sst <- nc_open("D:/Sam's Lenovo/Documents/sst/sst_2000_2022.nc")
+lons <- round(ncvar_get(sst, 'longitude'), 3)
+lats <- round(ncvar_get(sst, 'latitude'), 3)
+time <- ncvar_get(sst, 'time')
+
+data_temp$HSA_new <- NA
+data_temp$HS_n <- NA
+data_temp$HS_mean <- NA
+
+for (i in 1:nrow(data_temp)){
+  if (as.Date(data_temp$Date[i]) < as.Date("2000-01-01") | as.Date(data_temp$Date[i]) > as.Date("2022-12-03") | is.na(data_temp$Date[i])) {
+    data_temp$HSA_new[i] <- NA
+    next
+  }
+  
+  sample.date <- as.Date(data_temp$Date[i])
+  
+  start.date <- as.numeric(sample.date - as.Date('1981-1-1'))*24*3600
+  start.week <- time[which.closest(time, start.date)]
+  end.week <- time[which.closest(time, (as.numeric(sample.date - as.Date('1981-1-1'))-365)*24*3600)]
+  timewindow <- subset(time, end.week <= time & time <= start.week)
+  end.week <- which(time == end.week)
+  
+  # Get all weekly values from SSTData for given coordinates and input into vector
+  lon_index <- which(lons == round(floor(data_temp$Reef_Lon[i]/0.05)*0.05 + 0.025, 3))
+  lat_index <- which(lats == round(floor(data_temp$Reef_Lat[i]/0.05)*0.05 + 0.025, 3))
+  # cat(lat_index); cat("\n")   # - useful for debugging (display intermediate steps specified in () )
+  # cat(lon_index); cat("\n")
+  
+  # Extract variables
+  year.sst <- ncvar_get(sst, varid = "sst", start = c(lon_index,lat_index, end.week), count = c(1,1,length(timewindow)))
+  # cat(year.sst); cat("\n")
+  
+  # Check if for every set of coordinates, there is a corresponding temperature
+  if (all(is.nan(year.sst) == TRUE)) {
+    cat('Entry '); cat(i); cat('needs coordinate adjustments') # Row number that needs coordinate checking for if land
+    next
+  }
+  
+  threshold <- data_temp$MaxMM[i]
+
+  hotspot <- year.sst - threshold
+  
+  # Calculate HSA with comparison to threshold
+  heatweeks <- ifelse(hotspot > 0, hotspot, 0)
+  # for (k in 1:length(year.sst)) {   # k is an index for a position in year.sst
+  #   hotspot.dev <- year.sst[k] - threshold
+  #   if (is.nan(hotspot.dev) == TRUE | is.na(hotspot.dev) == TRUE){
+  #     print("NA")
+  #   }
+  #   if (hotspot.dev > 1) {
+  #     heatweek <- c(heatweek, hotspot.dev)
+  #   } else {
+  #     next   # distinguish between those that were not higher than threshold vs those that were NA or NaN
+  #   }
+  # }
+  data_temp$HSA_new[i] <- ifelse(any(heatweeks > 1), sum(heatweeks[heatweeks > 1]), 0)
+  data_temp$HS_n[i] <- ifelse(any(heatweeks > 0), sum(heatweeks > 0), 0)
+  data_temp$HS_mean[i] <- ifelse(any(heatweeks > 0), mean(heatweeks[heatweeks > 0], na.rm = TRUE), 0)
+  
+  # cat('Entry '); cat(i); cat(' done and returned '); cat(data_temp$HSA_new[i]); cat("\n")
+  pb$tick()
+}
+
+nc_close(sst)
+saveRDS(data_temp, file = here("Rdata", "230504_data_hsa_newHSA.RDS"))
+```
+
+
+Change code to extract monthly minimum:
+
+```{r, eval=FALSE}
+pb <- progress_bar$new(
+    format = "[:bar] :current/:total (:percent) elapsed :elapsed eta :eta",
+    total = nrow(data_temp)
+)
+
+mmm <- nc_open(here("data",'ct5km_climatology_v3.1.nc'))
+lons <- round(ncvar_get(mmm, 'lon'), 3)
+lats <- round(ncvar_get(mmm, 'lat'), 3)
+
+data_temp$MinMM <- NA
+
+# loop over data to fill MMM climatology values
+for (i in 1:nrow(data_temp)) {
+  
+  if(year(data_temp$Date[i]) >= 2000 & !is.na(data_temp$Date[i])) {
+    
+    # rounding strategy to get correct rounding resolution
+    lon_index <- which(lons == round(floor(data_temp$Reef_Lon[i]/0.05)*0.05 + 0.025, 3))
+    lat_index <- which(lats == round(floor(data_temp$Reef_Lat[i]/0.05)*0.05 + 0.025, 3))
+    
+    # adding 273.15 turns Celsius into Kelvin
+    mmm_val <- min(c(
+                  ncvar_get(mmm, 'sst_clim_january', 
+                         start = c(lon_index, lat_index, 1),
+                         count = c(1,1,1)),
+                  ncvar_get(mmm, 'sst_clim_february', 
+                         start = c(lon_index, lat_index, 1),
+                         count = c(1,1,1)),
+                  ncvar_get(mmm, 'sst_clim_march', 
+                         start = c(lon_index, lat_index, 1),
+                         count = c(1,1,1)),
+                  ncvar_get(mmm, 'sst_clim_april', 
+                         start = c(lon_index, lat_index, 1),
+                         count = c(1,1,1)),
+                  ncvar_get(mmm, 'sst_clim_may', 
+                         start = c(lon_index, lat_index, 1),
+                         count = c(1,1,1)),
+                  ncvar_get(mmm, 'sst_clim_june', 
+                         start = c(lon_index, lat_index, 1),
+                         count = c(1,1,1)),
+                  ncvar_get(mmm, 'sst_clim_july', 
+                         start = c(lon_index, lat_index, 1),
+                         count = c(1,1,1)),
+                  ncvar_get(mmm, 'sst_clim_september', 
+                         start = c(lon_index, lat_index, 1),
+                         count = c(1,1,1)),
+                  ncvar_get(mmm, 'sst_clim_october', 
+                         start = c(lon_index, lat_index, 1),
+                         count = c(1,1,1)),
+                  ncvar_get(mmm, 'sst_clim_november', 
+                         start = c(lon_index, lat_index, 1),
+                         count = c(1,1,1)),
+                  ncvar_get(mmm, 'sst_clim_december', 
+                         start = c(lon_index, lat_index, 1),
+                         count = c(1,1,1))
+                  )) + 273.15
+    
+    data_temp[i, 'MinMM'] <- mmm_val
+  }
+  
+  # cat('Entry '); cat(i); cat(' done\n')
+  pb$tick()
+  
+}
+
+nc_close(mmm)
+
+```
+
+
+### Calculate weekly cold stress variables
+
+```{r, eval=FALSE}
+pb <- progress_bar$new(
+    format = "[:bar] :current/:total (:percent) elapsed :elapsed eta :eta",
+    total = nrow(data_temp)
+)
+
+sst <- nc_open("D:/Sam's Lenovo/Documents/sst/sst_2000_2022.nc")
+lons <- round(ncvar_get(sst, 'longitude'), 3)
+lats <- round(ncvar_get(sst, 'latitude'), 3)
+time <- ncvar_get(sst, 'time')
+
+data_temp$CSA_new <- NA
+data_temp$CS_n <- NA
+data_temp$CS_mean <- NA
+
+for (i in 1:nrow(data_temp)){
+  if (as.Date(data_temp$Date[i]) < as.Date("2000-01-01") | as.Date(data_temp$Date[i]) > as.Date("2022-12-03") | is.na(data_temp$Date[i])) {
+    data_temp$CSA_new[i] <- NA
+    next
+  }
+  
+  sample.date <- as.Date(data_temp$Date[i])
+  
+  start.date <- as.numeric(sample.date - as.Date('1981-1-1'))*24*3600
+  start.week <- time[which.closest(time, start.date)]
+  end.week <- time[which.closest(time, (as.numeric(sample.date - as.Date('1981-1-1'))-365)*24*3600)]
+  timewindow <- subset(time, end.week <= time & time <= start.week)
+  end.week <- which(time == end.week)
+  
+  # Get all weekly values from SSTData for given coordinates and input into vector
+  lon_index <- which(lons == round(floor(data_temp$Reef_Lon[i]/0.05)*0.05 + 0.025, 3))
+  lat_index <- which(lats == round(floor(data_temp$Reef_Lat[i]/0.05)*0.05 + 0.025, 3))
+  # cat(lat_index); cat("\n")   # - useful for debugging (display intermediate steps specified in () )
+  # cat(lon_index); cat("\n")
+  
+  # Extract variables
+  year.sst <- ncvar_get(sst, varid = "sst", start = c(lon_index,lat_index, end.week), count = c(1,1,length(timewindow)))
+  # cat(year.sst); cat("\n")
+  
+  # Check if for every set of coordinates, there is a corresponding temperature
+  if (all(is.nan(year.sst) == TRUE)) {
+    cat('Entry '); cat(i); cat('needs coordinate adjustments') # Row number that needs coordinate checking for if land
+    next
+  }
+  
+  threshold <- data_temp$MinMM[i]
+
+  coldspell <- threshold - year.sst
+  
+  # Calculate CSA with comparison to threshold
+  coldweeks <- ifelse(coldspell > 0, coldspell, 0)
+  # for (k in 1:length(year.sst)) {   # k is an index for a position in year.sst
+  #   hotspot.dev <- year.sst[k] - threshold
+  #   if (is.nan(hotspot.dev) == TRUE | is.na(hotspot.dev) == TRUE){
+  #     print("NA")
+  #   }
+  #   if (hotspot.dev > 1) {
+  #     heatweek <- c(heatweek, hotspot.dev)
+  #   } else {
+  #     next   # distinguish between those that were not higher than threshold vs those that were NA or NaN
+  #   }
+  # }
+  data_temp$CSA_new[i] <- ifelse(any(coldweeks > 1), sum(coldweeks[coldweeks > 1]), 0)
+  data_temp$CS_n[i] <- ifelse(any(coldweeks > 0), sum(coldweeks > 0), 0)
+  data_temp$CS_mean[i] <- ifelse(any(coldweeks > 0), mean(coldweeks[coldweeks > 0], na.rm = TRUE), 0)
+  
+  pb$tick()
+}
+
+nc_close(sst)
+saveRDS(data_temp, file = here("Rdata", "230504_data_hsa_newCSA.RDS"))
+```
+
+Combine all with the original data:
+
+```{r, eval=FALSE}
+names(data_temp)[1:3] <- c("Date2", "Reef_Lon2", "Reef_Lat2")
+CombinedData_TempVars <- cbind(CombinedData, data_temp)
+
+#saveRDS(CombinedData_TempVars, file = here("Rdata", "CombinedData_TempVars v5.RDS"))
+```
+
+
+# Check merge of GBR data and temperature data
+```{r}
+colnames(CombinedData_TempVars)
+colnames(tempdata)
+
+vis_miss(CombinedData_TempVars, warn_large_data = F)
+vis_miss(tempdata, warn_large_data = F)
+
+CombinedData_TempVars <- CombinedData_TempVars %>% select(-dhw_extracted)
+tempdata <- tempdata %>% select(-dhw_extracted)
+
+data <- CombinedData_TempVars
+data <- tempdata
+```
+
+# Last Cleaning bits
+```{r, results='hide'}
+# no morphology data tied to disease before 2006
+post2005 <- subset(data, Report_Year > 2005)
+
+# remove 2023 data (incomplete at time of analysis)
+focused_data <- subset(post2005, Report_Year != 2023)
+
+focused_data$Unique_ID <- paste(focused_data$Reef_ID, focused_data$Report_Year, focused_data$Site, focused_data$Transect, sep = "_")
+
+#saveRDS(focused_data, here("RData", "Updated Dataset 05-31-2023.rds"))
+#write.csv(focused_data, here("data", "Updated Dataset 05-31-2023.csv"))
+
+colnames(groupcover3) <- c("AIMS_Reef_Name", "Visit", "Site", "Date", "Transect", "Algae_Cover", "Abiotic_Cover", "HardCoral_Cover", "SoftCoral_Cover", "AllCoral_Cover", "P_CODE", "Report_Year", "Depth", "Site_Lat", "Site_Lon")
+
+data <- focused_data
+
+data_merged <- data %>%
+  left_join(groupcover3, by = c("AIMS_Reef_Name", "Visit", "Site", "Date", "Transect", "Report_Year")) %>%
+  mutate(Algae_Cover = coalesce(Algae_Cover.y, Algae_Cover.x)) %>% 
+  mutate(Abiotic_Cover = coalesce(Abiotic_Cover.y, Abiotic_Cover.x)) %>% 
+  mutate(HardCoral_Cover = coalesce(HardCoral_Cover.y, HardCoral_Cover.x)) %>% 
+  mutate(SoftCoral_Cover = coalesce(SoftCoral_Cover.y, SoftCoral_Cover.x)) %>% 
+  mutate(AllCoral_Cover = coalesce(AllCoral_Cover.y, AllCoral_Cover.x)) %>% 
+  mutate(Site_Lat = coalesce(Site_Lat.y, Site_Lat.x)) %>% 
+  mutate(Site_Lon = coalesce(Site_Lon.y, Site_Lon.x))
+
+data_merged2 <- data_merged %>% select(-Algae_Cover.y, -Algae_Cover.x, 
+                                       -HardCoral_Cover.y, -HardCoral_Cover.x, 
+                                       -Abiotic_Cover.y, -Abiotic_Cover.x, 
+                                       -SoftCoral_Cover.y, -SoftCoral_Cover.x, 
+                                       -AllCoral_Cover.y, -AllCoral_Cover.x, 
+                                       -Site_Lat.y, -Site_Lat.x,
+                                       -Site_Lon.y, -Site_Lon.x)
+
+unique(data_merged2$Cover_Type)
+data_merged2$Cover_Type <- as.character("Hard Coral")
+
+#YearCode and Site_Cover are site-level and thus still missing. Need to calculate YearCode from ReportYear and Site_Cover from Transect-level cover
+data_merged3 <- data_merged2 %>%
+  group_by(Report_Year, Site_ID) %>%
+  mutate(Site_Cover = ifelse(is.na(Site_Cover), mean(HardCoral_Cover, na.rm = TRUE), Site_Cover)) %>%
+  ungroup()
+
+data_merged3$Year_Code <- ifelse(is.na(data_merged3$Year_Code), paste0(data_merged3$Report_Year - 1, substr(data_merged3$Report_Year, 3, 4)), data_merged3$Year_Code)
+
+
+bytaxa2 <- select(bytaxa2, c("AIMS_REEF_NAME", "REPORT_YEAR", "VISIT_NO", "SITE_NO", "TRANSECT_NO", "OBSERVER"))
+bytaxa2 <- bytaxa2[c(-1)]
+colnames(bytaxa2) <- c("AIMS_Reef_Name", "Report_Year", "Visit", "Site", "Transect", "Observer")
+bytaxa2_unique <- distinct(bytaxa2)
+data2 <- data_merged3
+data2 <- left_join(data2, bytaxa2_unique, by = c("AIMS_Reef_Name", "Report_Year", "Visit", "Site", "Transect"))
+
+# fix messy observer data
+#data2 <- data
+data2$Observer2 <- NA
+for (i in 1:nrow(data2)) {
+  data2$Observer2[i] <- if_else(data2$Observer[i] == "KC" | data2$Observer[i] == "KJ" | data2$Observer[i] == "kj", print("KJ"), data2$Observer[i])
+  data2$Observer2[i] <- if_else(data2$Observer[i] == "" | data2$Observer[i] == "None",  print("Missing"), data2$Observer2[i])
+}
+
+data_merged3$Observer <- data2$Observer2
+data <- data_merged3
+
+data <- data %>% select(-Date2, -Reef_Lon2, -Reef_Lat2)
+```
+
+### Adjusting for month of survey
+```{r}
+data06 <- subset(data, Report_Year == 2006)
+unique(month(data06$Date))   # starts in October ends in September
+#unique(data07$Date)
+
+data15 <- subset(data, Report_Year == 2015)
+unique(month(data15$Date))   # starts in August ends in May
+unique(data15$Date)
+
+data20 <- subset(data, Report_Year == 2020)
+unique(month(data20$Date))   # starts in September ends in June
+unique(data20$Date)
+
+data10 <- subset(data, Report_Year == 2010)
+unique(month(data10$Date))   # starts in October, ends in April
+unique(data10$Date)
+
+# if the goal is to account for the time between first and last survey, then we should set this on a scale that changes each year depending on when the survey starts that year
+        # not a shifting scale. You do from the earliest possible survey ever in dataset
+
+dat <- filter(data, complete.cases(data) == TRUE)
+FirstDay <- min(dat$Date)
+
+dat <- dat %>% mutate(Day_AllTime = (as.numeric(Date - FirstDay) + 1))
+
+dat$Day_Year <- c()
+years <- unique(dat$Report_Year)
+for (i in years) {
+  year_data <- dat[dat$Report_Year == i, ]
+  Day1 <- min(as.numeric(year_data$Date))
+  dat[dat$Report_Year == i, "Day_Year"] <- as.numeric(year_data$Date - Day1) + 1
+}
+
+dat$MonthDay <- NA
+for (i in 1:nrow(dat)) {
+  month <- month(dat$Date[i])
+  day <- day(dat$Date[i])
+  dat$MonthDay[i] <- sprintf("%02d-%02d", month, day)
+}
+unique(dat$MonthDay) # earliest day is Sept 1
+dat$Day <- NA
+for (i in 1:nrow(dat)) {
+  year <- year(dat$Date[i])
+  month <- as.character("09")
+  day <- as.character("01")
+  Day1 <- ymd(sprintf("%04d-%02s-%02s", year, month, day))
+  dat$Day[i] <- as.numeric(dat$Date[i] - Day1) + 1
+  dat$Day[i] <- ifelse(dat$Day[i]<=0 & dat$Sample_Year[i] == c(2004, 2008, 2012, 2016, 2020), print(as.numeric(dat$Day[i] + 1)), print(as.numeric(dat$Day[i])))
+  dat$Day[i] <- ifelse(dat$Day[i]<=0, print(as.numeric(dat$Day[i] + 365)), print(as.numeric(dat$Day[i])))
+}
+
+dat$Month <- NA
+for (i in 1:nrow(dat)) {
+  dat$Month[i] <- month(dat$Date[i])
+}
+#saveRDS(dat, here("RData", "Dataset 08-17-2023.rds"))
+#write.csv(dat, here("data", "Dataset 08-17-2023.csv"))
+```
+
+## Correlation Tests
+```{r}
+predictors <- dat[c("Report_Year", "Day", "HardCoral_Cover", "HSA_new", "CSA_new", "CS_mean", "HS_mean")]
+colnames(predictors) <- c("Report Year", "Day", "Coral Cover", "HSA", "CSA", "Mean CS", "Mean HS")
+
+cor_matrix <- cor(predictors)
+
+corrplot(cor_matrix, method = "color")
+corrplot(cor_matrix, method = "number", bg = "grey35", tl.col = "black")
+
+
+predictors <- dat[c("Report_Year", "Total_Incidence", "HardCoral_Cover", "HSA_new", "CSA_new")]
+colnames(predictors) <- c("Report Year", "Total_Incidence", "Coral Cover", "HSA", "CSA")
+
+cor_matrix <- cor(predictors)
+
+corrplot(cor_matrix, method = "color")
+corrplot(cor_matrix, method = "number", bg = "grey35", tl.col = "black")
+```
+
+## Human Activity Level
+Ultimately not used, so removed from the dataset
+```{r, include=FALSE}
+human_group <- function(ZONE) {
+  case_when(
+    ZONE == "Marine National Park" | ZONE == "Preservation"   ~ "Low",
+    ZONE == "Conservation Park" | ZONE == "Scientific Research"  ~ "Medium",
+    ZONE == "General Use" | ZONE == "Habitat Protection"  ~ "High"
+  )
+}
+
+dat$Human_Activity <- human_group(dat$Zone_Post2004)
+```
+
+
+
+# Data Exploration
+## Disease Number
+```{r}
+row_title <- c("A_SECTOR", "SHELF", "REEF_NAME", "FULLREEF_ID", "REEF_LAT", "REEF_LONG", "OPENORCLOSED", "OPENORCLOSED_AFTER2004", "MP_ZONE", "NEW_ZONE_2004", "REPORT_YEAR", "SITE_NO", "TRANSECT_NO", "BLEACHING_PERHC", "WHITESYNDROME", "SEB_DISEASE", "BROWNB_DISEASE", "BLACKBAND", "AN", "U_SCAR", "Site_ID", "Trans_ID")
+
+gbr_WS <- subset(gbr, gbr$WHITESYNDROME > 0)
+gbr_WS$WS <- print(1)
+gbr <- full_join(gbr, gbr_WS, by = row_title)
+gbr$WS[is.na(gbr$WS)] <- 0
+
+gbr_SEB <- subset(gbr, gbr$SEB_DISEASE > 0)
+gbr_SEB$SEB <- print(1)
+gbr <- full_join(gbr, gbr_SEB, by = c(row_title, "WS"))
+gbr$SEB[is.na(gbr$SEB)] <- 0
+
+gbr_Br <- subset(gbr, gbr$BROWNB_DISEASE > 0)
+gbr_Br$Br <- print(1)
+gbr <- full_join(gbr, gbr_Br, by = c(row_title, "WS", "SEB"))
+gbr$Br[is.na(gbr$Br)] <- 0
+
+gbr_BlB <- subset(gbr, gbr$BLACKBAND > 0)
+gbr_BlB$BlB <- print(1)
+gbr <- full_join(gbr, gbr_BlB, by = c(row_title, "WS", "SEB", "Br"))
+gbr$BlB[is.na(gbr$BlB)] <- 0
+
+gbr_Atr <- subset(gbr, gbr$AN > 0)
+gbr_Atr$Atr <- print(1)
+gbr <- full_join(gbr, gbr_Atr, by = c(row_title, "WS", "SEB", "Br", "BlB"))
+gbr$Atr[is.na(gbr$Atr)] <- 0
+
+gbr_US <- subset(gbr, gbr$U_SCAR > 0)
+gbr_US$US <- print(1)
+gbr <- full_join(gbr, gbr_US, by = c(row_title, "WS", "SEB", "Br", "BlB", "Atr"))
+gbr$US[is.na(gbr$US)] <- 0
+
+View(gbr)
+
+count_dis <- function(df, disease, col_n) {
+  df_sub <- subset(df, disease > 0)
+  df_sub$col_n <- print(1)
+  df_2 <- full_join(df, df_sub, by = row_title)
+  df_2$col_n[is.na(df_2$col_n)] <- 0
+}
+
+count_dis(gbr, gbr$SEB_DISEASE, SEB)
+
+
+# now sum disease presence/absence for disease number of that effect size
+gbr$Dis_Num <- rowSums(gbr[, c(23, 24, 25, 26, 27, 28)], na.rm=TRUE)
+
+ggplot(gbr) +
+  geom_jitter(aes(x = REPORT_YEAR, y = Dis_Num, col = Site_ID)) +
+  ylim(0.5, 5.5) +
+  theme(legend.position = "none")
+
+ggplot(gbr) +
+  geom_histogram(aes(x = Dis_Num)) +
+  labs(x = "Number of Diseases") +
+  theme_bw()
+# many effect sizes have no disease observed, will need to zero-inflate data again
+# most effect sizes only found 1 disease, though as many as 5 found in one transect
+
+ggplot(gbr) +
+  geom_col(aes(x = REPORT_YEAR, y = Dis_Num)) +
+  labs(title = "Diversity of Diseases over Time", x = "Year", y = "Number of Diseases") +
+  theme_bw()
+```
+
+
+## Disease Presence through time
+```{r}
+#  realy would like to do this with facetwrap but couldn't find a way to get it to work altogether
+ws_p <- ggplot(gbr) +
+  geom_col(aes(x = REPORT_YEAR, y = (WS/sum(WS, na.rm = TRUE))), na.rm = TRUE) +   # not correct? Need the sum of WS from that year, not whole dataset
+  labs(x = "Year", y = "White Syndrome") +
+  theme_bw()
+# White syndrome persistent in high abundance in GBR for all years examined
+
+seb_p <- ggplot(gbr) +
+  geom_col(aes(x = REPORT_YEAR, y = (SEB/sum(WS, na.rm = TRUE))), na.rm = TRUE) +
+  labs(x = "Year", y = "Skeletal Eroding Band") +
+  theme_bw()
+# SEB rarer in early years, but once appeared, persisted in GBR
+
+br_p <- ggplot(gbr) +
+  geom_col(aes(x = REPORT_YEAR, y = (Br/sum(Br, na.rm = TRUE))), na.rm = TRUE) +
+  labs(x = "Year", y = "Brown Band") +
+  theme_bw()
+# some small incidence 2004-05, really took off 2006 and on
+
+bl_p <- ggplot(gbr) +
+  geom_col(aes(x = REPORT_YEAR, y = (BlB/sum(BlB, na.rm = TRUE))), na.rm = TRUE) +
+  labs(x = "Year", y = "Black Band") +
+  theme_bw()
+# present throughout all years examined. Intense breakout recorded in many transects in 2003
+
+an_p <- ggplot(gbr) +
+  geom_col(aes(x = REPORT_YEAR, y = (Atr/sum(Atr, na.rm = TRUE))), na.rm = TRUE) +
+  labs(x = "Year", y = "Atromentis Necrosis") +
+  theme_bw()
+# first appears 2006, weird pattern. starting in 2010, has alternating years of incidence and absence across all sites in GBR
+# could be explained that Atr is only seen in certain sites and those sites were unable to be sampled in 2010, 2012, 2016, 2018?
+# could be explained that Atr has a quick recovery (all infected became healthy) or mortality (all infected died) period?
+
+us_p <- ggplot(gbr) +
+  geom_col(aes(x = REPORT_YEAR, y = (US/sum(US, na.rm = TRUE))), na.rm = TRUE) +
+  labs(x = "Year", y = "Unknown Scar") +
+  theme_bw()
+# persists throughout all years examined in high abundance
+
+ws_p + seb_p + br_p + bl_p + an_p + us_p + plot_annotation(title = "Disease Presence over Time", tag_levels = 'A') & theme(text = element_text(size = 12))
+```
+
+
+## Disease presence by site
+```{r}
+
+# Examine AN by site (this figure isn't really pretty but it gives me an initial look into what is going on with sites)
+ggplot(gbr) +
+  geom_jitter(aes(x = REPORT_YEAR, y = Atr, col = Site_ID)) +
+  theme(legend.position = "none")
+# vast majority of sites at 0 incidence. transects where it is visible tend to be from the same sites, particularly in the period of intermittent data
+AtrSub <- subset(gbr, gbr$Atr > 0)
+print(unique(AtrSub$Site_ID)) # 44 sites
+Atr_Reef <- print(unique(AtrSub$FULLREEF_ID)) # 29 reefs
+print(unique(AtrSub$REEF_NAME))
+ggplot(AtrSub) +
+  geom_histogram(aes(x = REPORT_YEAR), stat = "count")
+# also note 2013-14
+
+
+# Examine all by site:
+ggplot(gbr) +
+  geom_jitter(aes(x = REPORT_YEAR, y = WS, col = Site_ID)) +
+  theme(legend.position = "none")
+# unable to discern anything of note here - will need to examine sites more closely
+WSSub <- subset(gbr, gbr$WS > 0)
+print(unique(WSSub$Site_ID)) # 297 sites
+print(unique(WSSub$FULLREEF_ID)) # 101 reefs
+
+ggplot(gbr) +
+  geom_jitter(aes(x = REPORT_YEAR, y = SEB, col = Site_ID)) +
+  theme(legend.position = "none")
+
+ggplot(gbr) +
+  geom_jitter(aes(x = REPORT_YEAR, y = Br, col = Site_ID)) +
+  theme(legend.position = "none")
+
+ggplot(gbr) +
+  geom_jitter(aes(x = REPORT_YEAR, y = BlB, col = Site_ID)) +
+  theme(legend.position = "none")
+
+ggplot(gbr) +
+  geom_jitter(aes(x = REPORT_YEAR, y = US, col = Site_ID)) +
+  theme(legend.position = "none")
+# consistently a huge mess, seems to lose site abundance over last 3 years examined
+```
+
+
+## Map sites
+No coordinates for specific sites, only reef
+```{r}
+earth <- map_data("world2", regions = "Australia") # Australia map
+
+# Map reefs
+reefmap <- ggplot(fulldata, 
+       aes(x = Reef_Lon, y = Reef_Lat, col = AIMS_Reef_Name), height = 1, width = 4) +
+  geom_map(data = earth, map = earth, 
+           aes(x = long, y = lat, group = group, map_id = region), 
+           fill = "grey95", colour = "grey65", linewidth = 0.2) +
+  xlim(142, 154) +
+  ylim(-25, -11) +
+  geom_point(alpha = 0.25, size = 2, shape = 21) +
+  coord_quickmap() +
+  labs(title = "Reefs", x = "Longitude", y = "Latitude") +
+  theme_bw() +
+  theme(legend.position = "none")
+
+
+# Map sites
+sitemap <- ggplot(fulldata, 
+       aes(x = Site_Lon, y = Site_Lat, col = Site_ID), height = 1, width = 4) +
+  geom_map(data = earth, map = earth, 
+           aes(x = long, y = lat, group = group, map_id = region), 
+           fill = "grey95", colour = "grey65", linewidth = 0.2) +
+  xlim(142, 154) +
+  ylim(-25, -11) +
+  geom_point(alpha = 0.25, size = 2, shape = 21) +
+  coord_quickmap() +
+  labs(title = "Sites", x = "Longitude", y = "Latitude") +
+  theme_bw() +
+  theme(legend.position = "none")
+
+
+shelfmap <- ggplot(gbr, 
+       aes(x = LONGITUDE, y = LATITUDE, col = SHELF)) +
+  geom_map(data = earth, map = earth, 
+           aes(x = long, y = lat, group = group, map_id = region), 
+           fill = "grey95", colour = "grey65", size = 0.2) +
+  xlim(140, 155) +
+  ylim(-25, -10) +
+  geom_point(alpha = 0.25, size = 1.5, shape = 21) +
+  coord_quickmap() +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_bw() +
+  theme(legend.position = "bottom")
+
+reefmap + sitemap + plot_annotation(tag_levels = "A")
+```
+
+
+## Visualizing Observer change over time
+```{r}
+WS_obstime <- ggplot(fulldata) +
+  geom_col(aes(x = Report_Year, y = WS_Incidence, fill = Observer), position = "stack") +
+  theme_bw()
+
+
+data_long <- pivot_longer(fulldata, cols = c("WS_Incidence", "SEB_Incidence", "BrownB_Incidence", "BlackB_Incidence", "AN_Incidence", "Scar_Incidence"))
+unique(fulldata$Observer)
+print(count(fulldata, Observer), n = 23)
+
+for (i in 1:length(unique(fulldata$Observer))) {
+  plot <- ggplot(subset(data_long, Observer = unique(fulldata$Observer[i]))) +
+  geom_col(aes(x = Report_Year, y = value, fill = name)) +
+  theme_bw()
+  print(plot)
+} 
+```
+
+
+
+# Load Models
+Models are too large to add to GitHub. We use the models we ran to show summary and results, but are not available on GitHub
+```{r}
+# normal models
+mod_total <- readRDS(here("Rdata/Final Models/mod_Total_Final.RDS"))
+mod_white <- readRDS(here("Rdata/Final Models/mod_WS_Final.RDS"))
+mod_seb <- readRDS(here("Rdata/Final Models/mod_SEB_Final.RDS"))
+mod_brown <- readRDS(here("Rdata/Final Models/mod_BrownB_Final.RDS"))
+mod_black <- readRDS(here("Rdata/Final Models/mod_BlackB_Final.RDS"))
+mod_an <- readRDS(here("Rdata/Final Models/mod_AN_Final.RDS"))
+mod_scar <- readRDS(here("Rdata/Final Models/mod_Scar_Final.RDS"))
+
+# morphology models
+mod_Total_morph <- readRDS(here("Rdata/Final Models/mod_Total_morph_Final.RDS"))
+mod_white_morph <- readRDS(here("Rdata/Final Models/mod_WS_morph_Final.rds"))
+mod_seb_morph <- readRDS(here("Rdata/Final Models/mod_SEB_morph_Final.RDS"))
+mod_brown_morph <- readRDS(here("Rdata/Final Models/mod_BrownB_morph_Final.RDS"))
+mod_black_morph <- readRDS(here("Rdata/Final Models/mod_BlackB_morph_Final.RDS"))
+mod_an_morph <- readRDS(here("Rdata/Final Models/mod_AN_morph_Final.RDS"))
+mod_scar_morph <- readRDS(here("Rdata/Final Models/mod_Scar_morph_Final.RDS"))
+```
+
+
+
+# Model Code
+Prep and Scale Data
+```{r}
+dat <- filter(fulldata, complete.cases(fulldata) == TRUE)
+dat$sYear <- scale(dat$Report_Year)
+dat$sSampleYear <- scale(dat$Sample_Year)
+dat$sHS_n <- scale(dat$HS_n)
+dat$sHS_mean <- scale(dat$HS_mean)
+dat$sCSA <- scale(dat$CSA_new)
+dat$sCS_n <- scale(dat$CS_n)
+dat$sCS_mean <- scale(dat$CS_mean)
+dat$sHSA <- scale(dat$HSA_new)
+dat$sDepth <- scale(dat$Depth)
+dat$shelf <- factor(dat$Shelf)
+dat$zone <- factor(dat$Zone_Post2004, 
+                   levels = c("Preservation", "Marine National Park",
+                              "Conservation Park", "Scientific Research", 
+                              "Habitat Protection",  "General Use"), 
+                   labels = c("low", "low", "mid", "mid", "high", "high"))
+dat$sZone <- scale(as.numeric(dat$zone))
+dat$sCoral_Cover <- scale(dat$HardCoral_Cover)
+dat$sBranch_Cover <- scale(dat$Branch_Cover)
+dat$sDome_Cover <- scale(dat$Dome_Cover)
+dat$sPlate_Cover <- scale(dat$Plate_Cover)
+dat$sOther_Cover <- scale(dat$Other_Cover)
+dat$sDead_Cover <- scale(dat$Dead_Cover)
+dat$sAlgae <- scale(dat$Algae_Cover)
+dat$sAbiotic <- scale(dat$Abiotic_Cover)
+dat$sSoftCoral <- scale(dat$SoftCoral_Cover)
+dat$sAllCoral <- scale(dat$AllCoral_Cover)
+dat$sDisNum <- scale(dat$Disease_Num)
+dat$sLat <- scale(dat$Site_Lat)
+dat$sDay_Year <- scale(dat$Day_Year)
+dat$sDay <- scale(dat$Day)
+dat$sWS_Branch <- scale(dat$WS_Branch)
+dat$sWS_Dome <- scale(dat$WS_Dome)
+dat$sWS_Plate <- scale(dat$WS_Plate)
+dat$sWS_Other <- scale(dat$WS_Other)
+dat$sSEB_Branch <- scale(dat$SEB_Branch)
+dat$sSEB_Dome <- scale(dat$SEB_Dome)
+dat$sSEB_Plate <- scale(dat$SEB_Plate)
+dat$sSEB_Other <- scale(dat$SEB_Other)
+dat$sBrownB_Branch <- scale(dat$BrownB_Branch)
+dat$sBrownB_Dome <- scale(dat$BrownB_Dome)
+dat$sBrownB_Plate <- scale(dat$BrownB_Plate)
+dat$sBrownB_Other <- scale(dat$BrownB_Other)
+dat$sBlackB_Branch <- scale(dat$BlackB_Branch)
+dat$sBlackB_Dome <- scale(dat$BlackB_Dome)
+dat$sBlackB_Plate <- scale(dat$BlackB_Plate)
+dat$sBlackB_Other <- scale(dat$BlackB_Other)
+dat$sAN_Branch <- scale(dat$AN_Branch)
+dat$sAN_Dome <- scale(dat$AN_Dome)
+dat$sAN_Plate <- scale(dat$AN_Plate)
+dat$sAN_Other <- scale(dat$AN_Other)
+dat$sScar_Branch <- scale(dat$Scar_Branch)
+dat$sScar_Dome <- scale(dat$Scar_Dome)
+dat$sScar_Plate <- scale(dat$Scar_Plate)
+dat$sScar_Other <- scale(dat$Scar_Other)
+
+dat <- dat %>% mutate(Total_Incidence = WS_Incidence + SEB_Incidence + BrownB_Incidence + BlackB_Incidence + AN_Incidence + Scar_Incidence)
+```
+
+## Total Model
+```{r, eval=FALSE}
+formula <- bf(Total_Incidence ~ sYear + sHSA + sCSA + sCoral_Cover +
+                (1| Observer) +
+                (1| Month) +
+                (1| Reef_ID),
+              shape = ~ sYear + sHSA + sCSA + sCoral_Cover)
+
+mod_total <- brm(formula,
+                      family = negbinomial(),
+                      chains = 8,
+                      cores = 8,
+                      iter = 30000,
+                      warmup = 29000,
+                      data = dat)
+
+```
+
+```{r}
+summary(mod_total)
+```
+
+## Atramentous Necrosis Model
+```{r, eval=FALSE}
+formula <- bf(AN_Incidence ~  sYear + sHSA + sCSA + sCoral_Cover +
+                #(1 |Observer) +
+                #(1 |Month) +
+                (1 |Reef_ID),
+              shape = ~ sCoral_Cover )
+
+mod_an <- brm(formula,
+                 family = negbinomial(),
+              chains = 8,
+              cores = 8,
+              iter = 30000,
+              warmup = 29000,
+                 data = dat)
+
+```
+
+```{r}
+summary(mod_an)
+```
+
+
+## Black Band Disease Model
+```{r, eval=FALSE}
+formula <- bf(BlackB_Incidence ~  sYear + sHSA + sCSA + sCoral_Cover +
+                #(1 |Observer) +
+                #(1 |Month) +
+                (1 |Reef_ID),
+              shape = ~ sCoral_Cover)
+
+mod_black <- brm(formula,
+                 family = negbinomial(),
+                 chains = 8,
+                 cores = 8,
+                 iter = 30000,
+                 warmup = 29000,
+                 data = dat)
+
+```
+
+```{r}
+summary(mod_black)
+```
+
+## Brown Band Disease Model
+```{r, eval=FALSE}
+formula <- bf(BrownB_Incidence ~  sYear + sHSA + sCSA + sCoral_Cover +
+                (1 |Observer) +
+                #(1 |Month) +
+                (1 |Reef_ID),
+              shape = ~ sYear + sHSA + sCSA + sCoral_Cover)
+
+mod_brown <- brm(formula,
+                 family = negbinomial(),
+                 chains = 8,
+                 cores = 8,
+                 iter = 30000,
+                 warmup = 29000,
+                 data = dat)
+
+```
+
+```{r}
+summary(mod_brown)
+```
+
+## Skeletal Eroding Band Disease Model
+```{r, eval=FALSE}
+formula <- bf(SEB_Incidence ~  sYear + sHSA + sCSA + sCoral_Cover +
+                #(1 |Observer) +
+                #(1 |Month) +
+                (1 |Reef_ID),
+              shape = ~ sYear + sHSA + sCSA + sCoral_Cover)
+
+mod_seb <- brm(formula,
+                 family = negbinomial(),
+                 chains = 8,
+                 cores = 8,
+                 iter = 30000,
+                 warmup = 29000,
+                 data = dat)
+
+```
+
+```{r}
+summary(mod_seb)
+```
+
+## White Syndrome Model
+```{r, eval=FALSE}
+formula <- bf(WS_Incidence ~  sYear + sHSA + sCSA + sCoral_Cover +
+                (1 |Observer) +
+                (1 |Month) +
+                (1 |Reef_ID),
+              shape = ~  sYear  + sHSA + sCSA + sCoral_Cover)
+
+mod_white <- brm(formula,
+                 family = negbinomial(),
+                 chains = 8,
+                 cores = 8,
+                 iter = 30000,
+                 warmup = 29000,
+                 data = dat)
+
+```
+
+```{r}
+summary(mod_white)
+```
+
+## Uknown Scarring Model
+```{r, eval=FALSE}
+formula <- bf(Scar_Incidence ~ sYear + sHSA + sCSA + sCoral_Cover +
+                (1 |Observer) +
+                (1 |Month) +
+                (1 |Reef_ID),
+              shape = ~ sYear + sHSA + sCSA + sCoral_Cover)
+
+mod_scar <- brm(formula,
+                 family = negbinomial(),
+                 chains = 8,
+                 cores = 8,
+                 iter = 30000,
+                 warmup = 29000,
+                 data = dat)
+
+```
+
+```{r}
+summary(mod_scar)
+```
+
+
+## Total Morphology Model
+```{r, eval=FALSE}
+formula <- bf(Total_Incidence ~ sYear + sHSA + sCSA + sBranch_Cover + sDome_Cover + sPlate_Cover + sOther_Cover +
+                (1| Observer) +
+                (1| Month) +
+                (1| Reef_ID),
+              shape = ~ sYear + sHSA + sCSA + sCoral_Cover)
+
+mod_Total_morph <- brm(formula,
+                      family = negbinomial(),
+                      chains = 8,
+                      cores = 8,
+                      iter = 30000,
+                      warmup = 29000,
+                      data = dat)
+
+```
+
+```{r}
+summary(mod_Total_morph)
+```
+
+## Atramentous Necrosis Morphology Model
+```{r, eval=FALSE}
+formula <- bf(AN_Incidence ~ sYear + sHSA + sCSA + sBranch_Cover + sDome_Cover + sPlate_Cover + sOther_Cover +
+                #(1| Observer), #+
+                #(1| Month) +
+                (1| Reef_ID),
+              shape = ~ sCoral_Cover)
+
+mod_an_morph <- brm(formula,
+                   family = negbinomial(),
+                   chains = 8,
+                   cores = 8,
+                   iter = 30000,
+                   warmup = 29000,
+                   data = dat)
+
+```
+
+```{r}
+summary(mod_an_morph)
+```
+
+## Black Band Disease Morphology Model
+```{r, eval=FALSE}
+formula <- bf(BlackB_Incidence ~ sYear + sHSA + sCSA + sBranch_Cover + sDome_Cover + sPlate_Cover + sOther_Cover +
+                #(1| Observer) +
+                #(1| Month) +
+                (1| Reef_ID),
+              shape = ~ sCoral_Cover)
+
+mod_black_morph <- brm(formula,
+                       family = negbinomial(),
+                       chains = 8,
+                       cores = 8,
+                       iter = 30000,
+                       warmup = 29000,
+                       data = dat)
+
+```
+
+```{r}
+summary(mod_black_morph)
+```
+
+## Brown Band Disease Morphology Model
+```{r, eval=FALSE}
+formula <- bf(BrownB_Incidence ~ sYear + sHSA + sCSA + sBranch_Cover + sDome_Cover + sPlate_Cover + sOther_Cover +
+                #(1| Site_ID) +
+                (1| Observer) +
+                #(1| Month) +
+                (1| Reef_ID),
+              shape = ~ sCoral_Cover)
+
+mod_brown_morph <- brm(formula,
+                      family = negbinomial(),
+                      chains = 8,
+                      cores = 8,
+                      iter = 30000,
+                      warmup = 29000,
+                      data = dat)
+
+```
+
+```{r}
+summary(mod_brown_morph)
+```
+
+## Skeletal Eroding Band Disease Morphology Model
+```{r, eval=FALSE}
+formula <- bf(SEB_Incidence ~ sYear + sHSA + sCSA + sBranch_Cover + sDome_Cover + sPlate_Cover + sOther_Cover +
+                (1| Reef_ID), #+
+                #(1| Observer), # +
+                #(1| Month),
+              shape = ~ sCoral_Cover)
+
+mod_seb_morph <- brm(formula,
+                    family = negbinomial(),
+                    chains = 8,
+                    cores = 8,
+                    iter = 30000,
+                    warmup = 29000,
+                    data = dat)
+
+```
+
+```{r}
+summary(mod_seb_morph)
+```
+
+## White Syndrome Morphology Model
+```{r, eval=FALSE}
+formula <- bf(WS_Incidence ~ sYear + sHSA + sCSA + sBranch_Cover + sDome_Cover + sPlate_Cover + sOther_Cover +
+                (1| Reef_ID) +
+                (1| Observer) +
+                (1| Month),
+              shape = ~ sCoral_Cover)
+
+mod_white_morph <- brm(formula,
+                   family = negbinomial(),
+                   chains = 8,
+                   cores = 8,
+                   iter = 30000,
+                   warmup = 29000,
+                   data = dat)
+
+```
+
+```{r}
+summary(mod_white_morph)
+```
+
+## Uknown Scarring Morphology Model
+```{r, eval=FALSE}
+formula <- bf(Scar_Incidence ~ sYear + sHSA + sCSA + sBranch_Cover + sDome_Cover + sPlate_Cover + sOther_Cover +
+                (1| Reef_ID) +
+                (1| Observer) +
+                (1| Month),
+              shape = ~ sCoral_Cover)
+
+mod_scar_morph <- brm(formula,
+                     family = negbinomial(),
+                     chains = 8,
+                     cores = 8,
+                     iter = 30000,
+                     warmup = 29000,
+                     data = dat)
+
+```
+
+```{r}
+summary(mod_scar_morph)
+```
+
+
+
+# Figure Creation Code
+Getting means and SDs for conversion back
+```{r}
+meanSD <- dat %>% summarise(Year_mean = mean(Report_Year,na.rm = T),
+                            Year_SD  = sd(Report_Year,na.rm = T),
+                            HSA_mean  = mean(HSA_new,na.rm = T),
+                            HSA_SD  = sd(HSA_new,na.rm = T),
+                            CSA_mean  = mean(CSA_new,na.rm = T),
+                            CSA_SD = sd(CSA_new,na.rm = T),
+                            Cover_mean = mean(HardCoral_Cover, na.rm = T),
+                            Cover_SD = sd(HardCoral_Cover, na.rm = T)
+)
+
+meanSD
+```
+
+
+## Figure 2
+### Figure 2A - Total Disease Mean
+```{r}
+reg_coefs <- mod_total %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>%  #.variable != "b_scover_per", .variable != "b_zi_scover_per") %>% 
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+
+# mean data
+res_mean <-reg_coefs %>% filter(slope == "Mean")
+
+res_mean$.variable <- as.factor(res_mean$.variable)
+
+plot_all <- ggplot(res_mean, aes(x = .value, y = .variable)) +
+  geom_vline(xintercept = 0) +
+  stat_halfeye(.width = c(0.8, 0.95), point_interval = "median_qi", 
+               fill = '#CE5B97', 
+               alpha = 0.6) +
+  scale_slab_alpha_discrete(range = c(1, 0.4)) +
+  scale_y_discrete(labels = c("Coral Cover", "Year", "CSA", "HSA"), limits = c("b_sCoral_Cover", "b_sYear", "b_sCSA", "b_sHSA")) +
+  xlim(c(-0.4, 0.4)) + 
+  labs(x = "Mean Coefficient (Mu)", y = "") +
+       #title = "All Diseases",
+       #caption = "80% and 95% credible intervals shown in black") +
+  theme_classic()
+```
+### Figure 2B - Total Disease Phi
+```{r}
+# phi data (precision)
+res_phi <-reg_coefs %>% filter(slope == "Phi")
+
+phi_all <- ggplot(res_phi, aes(x = .value, y = .variable)) +
+  geom_vline(xintercept = 0) +
+  stat_halfeye(.width = c(0.8, 0.95), point_interval = "median_qi", fill = "#CE5B97", alpha = 0.6) +
+  scale_slab_alpha_discrete(range = c(1, 0.4)) +
+  scale_y_discrete(labels = c("Coral Cover", "Year", "CSA", "HSA"), limits = c("b_shape_sCoral_Cover", "b_shape_sYear", "b_shape_sCSA", "b_shape_sHSA")) +
+  xlim(c(-0.4, 0.4)) + 
+  labs(x = "Precision Coefficient (Phi)", y = "",
+       #title = "All Diseases",
+       caption = "80% and 95% credible intervals shown in black") +
+  theme_classic()
+```
+### Combine Plots
+```{r}
+plot_all / phi_all + plot_annotation(tag_levels = "A")
+```
+
+
+## Figure 3
+### Get regression coefficients from all models
+```{r}
+## All disease types ##
+reg_coefs_tot <- mod_total %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>%  
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean and Phi estimates
+res_mean_tot <- reg_coefs_tot %>% filter(slope == "Mean")
+res_phi_tot <- reg_coefs_tot %>% filter(slope == "Phi")
+res_mean_tot$.variable <- as.factor(res_mean_tot$.variable)
+res_phi_tot$.variable <- as.factor(res_phi_tot$.variable)
+
+## White syndrome ## 
+reg_coefs_WS <- mod_white %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>% 
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean and Phi estimates
+res_mean_WS <- reg_coefs_WS %>% filter(slope == "Mean")
+res_phi_WS <- reg_coefs_WS %>% filter(slope == "Phi")
+res_mean_WS$.variable <- as.factor(res_mean_WS$.variable)
+res_phi_WS$.variable <- as.factor(res_phi_WS$.variable)
+
+## Skeletal eroding band ##
+reg_coefs_SEB <- mod_seb %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>% 
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean and Phi estimates
+res_mean_SEB <- reg_coefs_SEB %>% filter(slope == "Mean")
+res_phi_SEB <- reg_coefs_SEB %>% filter(slope == "Phi")
+res_mean_SEB$.variable <- as.factor(res_mean_SEB$.variable)
+res_phi_SEB$.variable <- as.factor(res_phi_SEB$.variable)
+
+## Brown band ## 
+reg_coefs_brown <- mod_brown %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>%  
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean estimates
+res_mean_brown <- reg_coefs_brown %>% filter(slope == "Mean")
+res_phi_brown <- reg_coefs_brown %>% filter(slope == "Phi")
+res_mean_brown$.variable <- as.factor(res_mean_brown$.variable)
+res_phi_brown$.variable <- as.factor(res_phi_brown$.variable)
+
+## Black band ## 
+reg_coefs_black <- mod_black %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>% 
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean and Phi estimates
+res_mean_black <- reg_coefs_black %>% filter(slope == "Mean")
+res_phi_black <- reg_coefs_black %>% filter(slope == "Phi")
+res_mean_black$.variable <- as.factor(res_mean_black$.variable)
+res_phi_black$.variable <- as.factor(res_phi_black$.variable)
+
+
+## Atramentous necrosis ##
+reg_coefs_an <- mod_an %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>% 
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean and Phi estimates
+res_mean_an <- reg_coefs_an %>% filter(slope == "Mean")
+res_phi_an <- reg_coefs_an %>% filter(slope == "Phi")
+res_mean_an$.variable <- as.factor(res_mean_an$.variable)
+res_phi_an$.variable <- as.factor(res_phi_an$.variable)
+
+## Scarring 
+reg_coefs_scar <- mod_scar %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>% 
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean and phi estimates
+res_mean_scar <- reg_coefs_scar %>% filter(slope == "Mean")
+res_phi_scar <- reg_coefs_scar %>% filter(slope == "Phi")
+res_mean_scar$.variable <- as.factor(res_mean_scar$.variable)
+res_phi_scar$.variable <- as.factor(res_phi_scar$.variable)
+
+```
+### Plot colour palette
+```{r}
+colors <- c("White syndrome" = "#fcbf49", 
+            "Brown band" = "#bc6c25", 
+            "Black band" = "black",
+            "Skeletal eroding band" = "green4", 
+            "Atramentous necrosis" = "purple4", 
+            "Scarring" = "darkcyan",
+            "All disease types" = "#CE5B97")
+```
+### Figure 3A - Disease Comparison Mean
+```{r}
+mean_plot <- 
+ggplot() +
+  geom_vline(xintercept = 0) +
+  stat_slab(data = res_mean_WS, aes(x = .value, y = .variable, color = "White syndrome"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.35,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = res_mean_brown, aes(x = .value, y = .variable, color = "Brown band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.35,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = res_mean_black, aes(x = .value, y = .variable, color = "Black band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.3,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = res_mean_SEB, aes(x = .value, y = .variable, color = "Skeletal eroding band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = res_mean_an, aes(x = .value, y = .variable, color = "Atramentous necrosis"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") +
+  stat_slab(data = res_mean_scar, aes(x = .value, y = .variable, color = "Scarring"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") +
+  stat_halfeye(data = res_mean_tot, aes(x = .value, y = .variable, fill = "All disease types", alpha = 0.8), .width = c(0.8, 0.95), point_interval = "median_qi", 
+               alpha = 1,
+               size = 6,
+               height = 0.75,
+               normalize = "groups") +
+  #scale_y_discrete(labels = c("Coral Cover", "Year", "CSA", "HSA"), limits = c("b_sCoral_Cover", "b_sYear", "b_sCSA", "b_sHSA")) + # This is for the plot including cover
+  scale_y_discrete(labels = c("Year", "CSA", "HSA"), limits = c("b_sYear", "b_sCSA", "b_sHSA")) +
+  labs(x = "Mean Coefficient (Mu)", y = "") +
+  xlim(c(-1, 1)) + 
+  theme_classic() +
+  theme(axis.text.y = element_text(size = 15),
+        axis.title.x = element_text(size = 16),
+        axis.text.x = element_text(size = 14)) +
+  scale_color_manual(values = colors,
+                     name = "Disease type") + 
+  scale_fill_manual(values = colors,
+                    name = "")
+```
+### Figure 3B - Disease Comparison Phi
+```{r}
+phi_plot <- 
+ggplot() +
+  geom_vline(xintercept = 0) +
+  stat_slab(data = res_phi_WS, aes(x = .value, y = .variable, color = "White syndrome"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.35,
+            linewidth = 0.75,
+            height= 0.75,
+            normalize = "groups") + 
+  stat_slab(data = res_phi_brown, aes(x = .value, y = .variable, color = "Brown band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.35,
+            linewidth = 0.75,
+            height= 0.75,
+            normalize = "groups") + 
+  stat_slab(data = res_phi_black, aes(x = .value, y = .variable, color = "Black band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.3,
+            linewidth = 0.75,
+            height= 0.75,
+            normalize = "groups") + 
+  stat_slab(data = res_phi_SEB, aes(x = .value, y = .variable, color = "Skeletal eroding band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height= 0.75,
+            normalize = "groups") + 
+  stat_slab(data = res_phi_an, aes(x = .value, y = .variable, color = "Atramentous necrosis"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height= 0.75,
+            normalize = "groups") +
+  stat_slab(data = res_phi_scar, aes(x = .value, y = .variable, color = "Scarring"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height= 0.75,
+            normalize = "groups") +
+  stat_halfeye(data = res_phi_tot, aes(x = .value, y = .variable, fill = "All disease types", alpha = 0.8), .width = c(0.8, 0.95), point_interval = "median_qi", 
+               alpha = 1,
+               size = 6,
+               height= 0.75,
+               normalize = "groups") +
+  #scale_y_discrete(labels = c( "Coral Cover", "Year", "CSA", "HSA"), limits = c("b_shape_sCoral_Cover", "b_shape_sYear", "b_shape_sCSA", "b_shape_sHSA")) + # This is for the plot including cover
+  scale_y_discrete(labels = c("Year", "CSA", "HSA"), limits = c("b_shape_sYear", "b_shape_sCSA", "b_shape_sHSA")) +
+  labs(x = "Precision Coefficient (Phi)", y = "") +
+  xlim(c(-1, 1)) + 
+  theme_classic() +
+  theme(axis.text.y = element_text(size = 15),
+        axis.title.x = element_text(size = 16),
+        axis.text.x = element_text(size = 14)) +
+  scale_color_manual(values = colors,
+                     name = "Disease type") + 
+  scale_fill_manual(values = colors,
+                    name = "")
+```
+### Combine Plots
+```{r}
+mean_plot / phi_plot + plot_annotation(tag_levels = "A")
+```
+
+
+## Figure 4
+### Total Disease and Morphology Cover
+```{r}
+reg_coefs <- mod_Total_morph %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>%  
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+
+# mean data
+res_mean <-reg_coefs %>% filter(slope == "Mean")
+
+res_mean$.variable <- as.factor(res_mean$.variable)
+
+plot_Totalmorph <- ggplot(res_mean, aes(x = .value, y = .variable)) +
+  geom_vline(xintercept = 0) +
+  stat_halfeye(.width = c(0.8, 0.95), point_interval = "median_qi", 
+               fill = "#CE5B97", 
+               alpha = 0.6) +
+  scale_slab_alpha_discrete(range = c(1, 0.4)) +
+  scale_y_discrete(labels = c("Other Coral Cover", "Plate Coral Cover", "Domed Coral Cover", "Branched Coral Cover"), limits = c("b_sOther_Cover", "b_sPlate_Cover", "b_sDome_Cover", "b_sBranch_Cover")) +
+  labs(x = "Mean Coefficient (Mu)", y = "",
+  caption = "80% and 95% credible intervals shown in black") +
+  theme_classic()
+```
+
+
+## Figure 5
+### Disease Comparison and Morphology Cover
+### Get regression coefficients from all morphology models
+```{r}
+## All disease types ##
+reg_coefs_tot_morph <- mod_Total_morph %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>%  #.variable != "b_scover_per", .variable != "b_zi_scover_per") %>% 
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean and Phi estimates
+res_mean_tot_morph <- reg_coefs_tot_morph %>% filter(slope == "Mean")
+res_phi_tot_morph <- reg_coefs_tot_morph %>% filter(slope == "Phi")
+res_mean_tot_morph$.variable <- as.factor(res_mean_tot_morph$.variable)
+
+## White syndrome ## 
+reg_coefs_WS_morph <- mod_white_morph %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>%  #.variable != "b_scover_per", .variable != "b_zi_scover_per") %>% 
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean and Phi estimates
+res_mean_WS_morph <- reg_coefs_WS_morph %>% filter(slope == "Mean")
+res_phi_WS_morph <- reg_coefs_WS_morph %>% filter(slope == "Phi")
+res_mean_WS_morph$.variable <- as.factor(res_mean_WS_morph$.variable)
+
+## Skeletal eroding band ##
+reg_coefs_SEB_morph <- mod_seb_morph %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>%  #.variable != "b_scover_per", .variable != "b_zi_scover_per") %>% 
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean and Phi estimates
+res_mean_SEB_morph <- reg_coefs_SEB_morph %>% filter(slope == "Mean")
+res_phi_SEB_morph <- reg_coefs_SEB_morph %>% filter(slope == "Phi")
+res_mean_SEB_morph$.variable <- as.factor(res_mean_SEB_morph$.variable)
+
+## Brown band ## 
+reg_coefs_brown_morph <- mod_brown_morph %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>%  #.variable != "b_scover_per", .variable != "b_zi_scover_per") %>% 
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean estimates
+res_mean_brown_morph <- reg_coefs_brown_morph %>% filter(slope == "Mean")
+res_phi_brown_morph <- reg_coefs_brown_morph %>% filter(slope == "Phi")
+res_mean_brown_morph$.variable <- as.factor(res_mean_brown_morph$.variable)
+
+## Black band ## 
+reg_coefs_black_morph <- mod_black_morph %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>%  #.variable != "b_scover_per", .variable != "b_zi_scover_per") %>% 
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean and Phi estimates
+res_mean_black_morph <- reg_coefs_black_morph %>% filter(slope == "Mean")
+res_phi_black_morph <- reg_coefs_black_morph %>% filter(slope == "Phi")
+res_mean_black_morph$.variable <- as.factor(res_mean_black_morph$.variable)
+
+## Atramentous necrosis ##
+reg_coefs_an_morph <- mod_an_morph %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>%  #.variable != "b_scover_per", .variable != "b_zi_scover_per") %>% 
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean and Phi estimates
+res_mean_an_morph <- reg_coefs_an_morph %>% filter(slope == "Mean")
+res_phi_an_morph <- reg_coefs_an_morph %>% filter(slope == "Phi")
+res_mean_an_morph$.variable <- as.factor(res_mean_an_morph$.variable)
+
+## Scarring 
+reg_coefs_scar_morph <- mod_scar_morph %>% 
+  gather_draws(`b_.*`, regex = TRUE) %>% 
+  mutate(slope = as.factor(ifelse(str_detect(.variable, "shape_"), "Phi", "Mean")),
+         intercept = str_detect(.variable, "Intercept")) %>% 
+  filter(intercept == FALSE) %>%  #.variable != "b_scover_per", .variable != "b_zi_scover_per") %>% 
+  mutate(slope = fct_relevel(slope, "Mean", "Phi"))
+## Mean and phi estimates
+res_mean_scar_morph <- reg_coefs_scar_morph %>% filter(slope == "Mean")
+res_phi_scar_morph <- reg_coefs_scar_morph %>% filter(slope == "Phi")
+res_mean_scar_morph$.variable <- as.factor(res_mean_scar_morph$.variable)
+```
+### Plot all diseases and overall mean coefficients
+```{r}
+morph_plot <-
+ggplot() +
+  geom_vline(xintercept = 0) +
+  stat_slab(data = res_mean_WS_morph, aes(x = .value, y = .variable, color = "White syndrome"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.35,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = res_mean_brown_morph, aes(x = .value, y = .variable, color = "Brown band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.35,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = res_mean_black_morph, aes(x = .value, y = .variable, color = "Black band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.3,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = res_mean_SEB_morph, aes(x = .value, y = .variable, color = "Skeletal eroding band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = res_mean_an_morph, aes(x = .value, y = .variable, color = "Atramentous necrosis"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") +
+  stat_slab(data = res_mean_scar_morph, aes(x = .value, y = .variable, color = "Scarring"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") +
+  stat_halfeye(data = res_mean_tot_morph, aes(x = .value, y = .variable, fill = "All disease types", alpha = 0.8), .width = c(0.8, 0.95), point_interval = "median_qi", 
+               alpha = 1,
+               size = 6,
+               height = 0.75,
+               normalize = "groups") +
+  scale_y_discrete(labels = c("Other", "Plating", "Domed", "Branched"), limits = c("b_sOther_Cover", "b_sPlate_Cover", "b_sDome_Cover", "b_sBranch_Cover")) + 
+  labs(x = "Mean Coefficient (Mu)", y = "") +
+  xlim(c(-1, 1)) + 
+  theme_classic() +
+  theme(axis.text.y = element_text(size = 15),
+        axis.title.x = element_text(size = 16),
+        axis.text.x = element_text(size = 14),
+        legend.position = "bottom") +
+  scale_color_manual(values = colors,
+                     name = "Disease type") + 
+  scale_fill_manual(values = colors,
+                    name = "")
+```
+
+
+
+# Supplementary Figure Creation
+## Figure S1. Random Effects - Main Models
+```{r}
+rdm_tot <- mod_total %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+rdm_WS <- mod_white %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+rdm_SEB <- mod_seb %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+rdm_brown <- mod_brown %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+rdm_black <- mod_black %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+rdm_an <- mod_an %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+rdm_scar <- mod_scar %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+
+
+# Plot random effects
+rdm_plot <- 
+  ggplot() +
+  geom_vline(xintercept = 0) +
+  stat_slab(data = rdm_WS, aes(x = .value, y = .variable, color = "White syndrome"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.35,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = rdm_brown, aes(x = .value, y = .variable, color = "Brown band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.35,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = rdm_black, aes(x = .value, y = .variable, color = "Black band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.3,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = rdm_SEB, aes(x = .value, y = .variable, color = "Skeletal eroding band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = rdm_an, aes(x = .value, y = .variable, color = "Atramentous necrosis"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") +
+  stat_slab(data = rdm_scar, aes(x = .value, y = .variable, color = "Scarring"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") +
+  stat_halfeye(data = rdm_tot, aes(x = .value, y = .variable, fill = "All disease types"), .width = c(0.8, 0.95), point_interval = "median_qi", 
+               alpha = 1,
+               size = 6,
+               height = 0.75,
+               normalize = "groups") +
+  scale_y_discrete(labels = c("Reef", "Observer", "Month"), limits = c("sd_Reef_ID__Intercept", "sd_Observer__Intercept", "sd_Month__Intercept")) +
+  labs(x = "Standard Deviation (SD)", y = "") +
+  theme_classic() +
+  theme(axis.text.y = element_text(size = 15),
+        axis.title.x = element_text(size = 16),
+        axis.text.x = element_text(size = 14),
+        legend.position = "bottom") +
+  scale_color_manual(values = colors,
+                     name = "Disease type") + 
+  scale_fill_manual(values = colors,
+                    name = "")
+```
+
+## Figure S2. Random Effects - Morphology Models
+```{r}
+rdm_tot_morph <- mod_Total_morph %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+rdm_WS_morph <- mod_white_morph %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+rdm_SEB_morph <- mod_seb_morph %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+rdm_brown_morph <- mod_brown_morph %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+rdm_black_morph <- mod_black_morph %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+rdm_an_morph <- mod_an_morph %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+rdm_scar_morph <- mod_scar_morph %>% 
+  gather_draws(`sd_.*`, regex = TRUE) 
+
+
+rdm_morph_plot <- 
+  ggplot() +
+  geom_vline(xintercept = 0) +
+  stat_slab(data = rdm_WS_morph, aes(x = .value, y = .variable, color = "White syndrome"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.35,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = rdm_brown_morph, aes(x = .value, y = .variable, color = "Brown band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.35,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = rdm_black_morph, aes(x = .value, y = .variable, color = "Black band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.3,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = rdm_SEB_morph, aes(x = .value, y = .variable, color = "Skeletal eroding band"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") + 
+  stat_slab(data = rdm_an_morph, aes(x = .value, y = .variable, color = "Atramentous necrosis"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") +
+  stat_slab(data = rdm_scar_morph, aes(x = .value, y = .variable, color = "Scarring"), .width = c(0.8, 0.95), point_interval = "median_qi",  # Use slab
+            fill = "NA", 
+            alpha = 0.25,
+            linewidth = 0.75,
+            height = 0.75,
+            normalize = "groups") +
+  stat_halfeye(data = rdm_tot_morph, aes(x = .value, y = .variable, fill = "All disease types"), .width = c(0.8, 0.95), point_interval = "median_qi", 
+               alpha = 1,
+               size = 6,
+               height = 0.75,
+               normalize = "groups") +
+  scale_y_discrete(labels = c("Reef", "Observer", "Month"), limits = c("sd_Reef_ID__Intercept", "sd_Observer__Intercept", "sd_Month__Intercept")) +
+  labs(x = "Standard Deviation (SD)", y = "") +
+  theme_classic() +
+  theme(axis.text.y = element_text(size = 15),
+        axis.title.x = element_text(size = 16),
+        axis.text.x = element_text(size = 14),
+        legend.position = "bottom") +
+  scale_color_manual(values = colors,
+                     name = "Disease type") + 
+  scale_fill_manual(values = colors,
+                    name = "")
+```
+
+## Figure S3. How to read main text figures.
+### Build line trend figures
+```{r}
+## HSA
+sHSA_seq <- seq(min(dat$sHSA),max(dat$sHSA),length.out = 100)
+
+# creating new data
+new_hsa<- expand_grid(
+  sYear = 0,
+  sHSA = sHSA_seq,
+  sCSA = 0,
+  sCoral_Cover = 0
+)
+
+
+res_draws <- mod_total %>% 
+  epred_draws(newdata = new_hsa, dpar = c("mu", "shape"), re_formula = NA) %>% 
+  group_by(sHSA, .draw) %>% summarise(sHSA = mean(sHSA),
+                                          rHSA = (sHSA*meanSD$HSA_SD + meanSD$HSA_mean),
+                                          predicted = mean(.epred),
+                                          mu = mean(mu),
+                                          shape = mean(shape)) 
+
+# mu
+hsa_mu <- ggplot(res_draws, aes(x = rHSA, y = mu)) +
+  stat_lineribbon() + 
+  scale_fill_brewer(palette = "Reds") +
+  labs(x =  "Heat Stress Accumulation (\u00B0C-week)", y = "Disease incidence",
+       fill = "95% Credible Interval") +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none")
+
+# phi
+hsa_phi <- ggplot(res_draws, aes(x = rHSA, y = shape)) +
+  stat_lineribbon() + 
+  scale_fill_brewer(palette = "Greens") +
+  labs(x =  "Heat Stress Accumulation (\u00B0C-week)", y = "Precison of disease incidence",
+       fill = "95% Credible Interval") +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none")
+
+
+
+
+## CSA
+# new data range
+sCSA_seq <- seq(min(dat$sCSA),max(dat$sCSA),length.out = 100)
+
+# creating new data
+new_CSA<- expand_grid(
+  sYear = 0,
+  sHSA = 0,
+  sCSA = sCSA_seq,
+  sCoral_Cover = 0
+)
+
+res_draws <- mod_total %>% 
+  epred_draws(newdata = new_CSA, dpar = c("mu", "shape"), re_formula = NA) %>% 
+  group_by(sCSA, .draw) %>% summarise(sCSA = mean(sCSA),
+                                        rCSA = (sCSA*meanSD$CSA_SD + meanSD$CSA_mean),
+                                        predicted = mean(.epred),
+                                        mu = mean(mu),
+                                        shape = mean(shape))
+
+# mu
+csa_mu <- ggplot(res_draws, aes(x = rCSA, y = mu)) +
+  stat_lineribbon() + 
+  scale_fill_brewer(palette = "Reds") +
+  labs(x =  "Cold Stress Accumulation (\u00B0C-weeks)", y = "Disease incidence",
+       fill = "95% Credible Interval") +
+  #ylim(0, 0.30) + 
+  #xlim(0, 3.5) +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none")
+
+# phi
+csa_phi <- ggplot(res_draws, aes(x = rCSA, y = shape)) +
+  stat_lineribbon() + 
+  scale_fill_brewer(palette = "Greens") +
+  labs(x =  "Cold Stress Accumulation (\u00B0C-week)", y = "Precison of disease incidence",
+       fill = "95% Credible Interval") +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none")
+
+
+
+
+## Year
+# new data range
+sYear_seq <- seq(min(dat$sYear),max(dat$sYear),length.out = 100)
+
+# creating new data
+new_year<- expand_grid(
+  sYear = sYear_seq,
+  sHSA = 0,
+  sCSA = 0,
+  sCoral_Cover = 0
+)
+
+res_draws <- mod_total %>% 
+  epred_draws(newdata = new_year, dpar = c("mu", "shape"), re_formula = NA) %>% 
+  group_by(sYear, .draw) %>% summarise(sYear = mean(sYear),
+                                      ryear = (sYear*meanSD$Year_SD + meanSD$Year_mean),
+                                      predicted = mean(.epred),
+                                      mu = mean(mu),
+                                      shape = mean(shape))
+
+# mu
+year_mu <- ggplot(res_draws, aes(x = ryear, y = mu)) +
+  stat_lineribbon() + 
+  scale_fill_brewer(palette = "Reds") +
+  labs(x =  "Year", y = "Disease incidence",
+       fill = "95% Credible Interval") +
+  #ylim(0, 0.30) + 
+  #xlim(0, 3.5) +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none")
+
+# phi
+year_phi <- ggplot(res_draws, aes(x = ryear, y = shape)) +
+  stat_lineribbon() + 
+  scale_fill_brewer(palette = "Greens") +
+  labs(x =  "Year", y = "Precison of disease incidence",
+       fill = "95% Credible Interval") +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none")
+
+
+
+
+## Cover
+# new data range
+sCover_seq <- seq(min(dat$sCoral_Cover),max(dat$sCoral_Cover),length.out = 100)
+
+# creating new data
+new_cover<- expand_grid(
+  sYear = 0,
+  sHSA = 0,
+  sCSA = 0,
+  sCoral_Cover = sCover_seq
+)
+
+res_draws <- mod_total %>% 
+  epred_draws(newdata = new_cover, dpar = c("mu", "shape"), re_formula = NA) %>% 
+  group_by(sCoral_Cover, .draw) %>% summarise(sCoral_Cover = mean(sCoral_Cover),
+                                       rcover = (sCoral_Cover*meanSD$Cover_SD + meanSD$Cover_mean),
+                                       predicted = mean(.epred),
+                                       mu = mean(mu),
+                                       shape = mean(shape))
+
+# mu
+cover_mu <- ggplot(res_draws, aes(x = rcover, y = mu)) +
+  stat_lineribbon() + 
+  scale_fill_brewer(palette = "Reds") +
+  labs(x =  "Coral Cover (%)", y = "Disease incidence",
+       fill = "95% Credible Interval") +
+  #ylim(0, 0.30) + 
+  #xlim(0, 3.5) +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none")
+
+# phi
+cover_phi <- ggplot(res_draws, aes(x = rcover, y = shape)) +
+  stat_lineribbon() + 
+  scale_fill_brewer(palette = "Greens") +
+  labs(x =  "Coral Cover (%)", y = "Precison of disease incidence",
+       fill = "95% Credible Interval") +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "none")
+```
+### Combine plots
+```{r}
+(hsa_mu + hsa_phi) / (csa_mu + csa_phi) / (year_mu + year_phi) / (cover_mu + cover_phi) + plot_annotation(tag_levels = "A")
+```
+
