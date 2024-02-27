@@ -66,6 +66,7 @@ bytaxa2 <- dis.genus.zeros
 
 ## Data with Temperature Metrics
 tempdata <- readRDS(here("Rdata", "CombinedData_TempVars v5.RDS"))
+CombinedData_TempVars <- readRDS(here("Rdata", "CombinedData_TempVars v5.RDS"))
 
 ## FULL DATA
 fulldata <- readRDS(here("Rdata", "Final Dataset.rds"))
@@ -248,7 +249,7 @@ unique(combined_data$Bleaching)
 combined_data$Bleaching <- gsub("0\\+_", "0\\+", combined_data$Bleaching)
 ```
 
-```{r check Bleaching values}
+```{r check date values}
 summary(combined_data$Date)
 # found instances of "2227" year
 # Report year says 2023, so this is most likely 2022-10-27
@@ -909,7 +910,7 @@ data <- data %>% select(-Date2, -Reef_Lon2, -Reef_Lat2)
 ```
 
 ### Adjusting for month of survey
-```{r}
+```{r, results='hide', warning=FALSE}
 data06 <- subset(data, Report_Year == 2006)
 unique(month(data06$Date))   # starts in October ends in September
 #unique(data07$Date)
@@ -978,6 +979,7 @@ cor_matrix <- cor(predictors)
 corrplot(cor_matrix, method = "color")
 corrplot(cor_matrix, method = "number", bg = "grey35", tl.col = "black")
 
+dat <- dat %>% mutate(Total_Incidence = WS_Incidence + SEB_Incidence + BrownB_Incidence + BlackB_Incidence + AN_Incidence + Scar_Incidence)
 
 predictors <- dat[c("Report_Year", "Total_Incidence", "HardCoral_Cover", "HSA_new", "CSA_new")]
 colnames(predictors) <- c("Report Year", "Total_Incidence", "Coral Cover", "HSA", "CSA")
@@ -1051,23 +1053,21 @@ count_dis <- function(df, disease, col_n) {
 count_dis(gbr, gbr$SEB_DISEASE, SEB)
 
 
-# now sum disease presence/absence for disease number of that effect size
-gbr$Dis_Num <- rowSums(gbr[, c(23, 24, 25, 26, 27, 28)], na.rm=TRUE)
 
-ggplot(gbr) +
-  geom_jitter(aes(x = REPORT_YEAR, y = Dis_Num, col = Site_ID)) +
+ggplot(gbr2) +
+  geom_jitter(aes(x = Report_Year, y = Disease_Num, col = Site_ID)) +
   ylim(0.5, 5.5) +
   theme(legend.position = "none")
 
-ggplot(gbr) +
-  geom_histogram(aes(x = Dis_Num)) +
+ggplot(gbr2) +
+  geom_histogram(aes(x = Disease_Num)) +
   labs(x = "Number of Diseases") +
   theme_bw()
 # many effect sizes have no disease observed, will need to zero-inflate data again
 # most effect sizes only found 1 disease, though as many as 5 found in one transect
 
-ggplot(gbr) +
-  geom_col(aes(x = REPORT_YEAR, y = Dis_Num)) +
+ggplot(gbr2) +
+  geom_col(aes(x = Report_Year, y = Disease_Num)) +
   labs(title = "Diversity of Diseases over Time", x = "Year", y = "Number of Diseases") +
   theme_bw()
 ```
@@ -1077,31 +1077,31 @@ ggplot(gbr) +
 ```{r}
 #  realy would like to do this with facetwrap but couldn't find a way to get it to work altogether
 ws_p <- ggplot(gbr) +
-  geom_col(aes(x = REPORT_YEAR, y = (WS/sum(WS, na.rm = TRUE))), na.rm = TRUE) +   # not correct? Need the sum of WS from that year, not whole dataset
+  geom_col(aes(x = REPORT_YEAR, y = (WHITESYNDROME/sum(WHITESYNDROME, na.rm = TRUE))), na.rm = TRUE) +   # not correct? Need the sum of WS from that year, not whole dataset
   labs(x = "Year", y = "White Syndrome") +
   theme_bw()
 # White syndrome persistent in high abundance in GBR for all years examined
 
 seb_p <- ggplot(gbr) +
-  geom_col(aes(x = REPORT_YEAR, y = (SEB/sum(WS, na.rm = TRUE))), na.rm = TRUE) +
+  geom_col(aes(x = REPORT_YEAR, y = (SEB_DISEASE/sum(SEB_DISEASE, na.rm = TRUE))), na.rm = TRUE) +
   labs(x = "Year", y = "Skeletal Eroding Band") +
   theme_bw()
 # SEB rarer in early years, but once appeared, persisted in GBR
 
 br_p <- ggplot(gbr) +
-  geom_col(aes(x = REPORT_YEAR, y = (Br/sum(Br, na.rm = TRUE))), na.rm = TRUE) +
+  geom_col(aes(x = REPORT_YEAR, y = (BROWNB_DISEASE/sum(BROWNB_DISEASE, na.rm = TRUE))), na.rm = TRUE) +
   labs(x = "Year", y = "Brown Band") +
   theme_bw()
 # some small incidence 2004-05, really took off 2006 and on
 
 bl_p <- ggplot(gbr) +
-  geom_col(aes(x = REPORT_YEAR, y = (BlB/sum(BlB, na.rm = TRUE))), na.rm = TRUE) +
+  geom_col(aes(x = REPORT_YEAR, y = (BLACKBAND/sum(BLACKBAND, na.rm = TRUE))), na.rm = TRUE) +
   labs(x = "Year", y = "Black Band") +
   theme_bw()
 # present throughout all years examined. Intense breakout recorded in many transects in 2003
 
 an_p <- ggplot(gbr) +
-  geom_col(aes(x = REPORT_YEAR, y = (Atr/sum(Atr, na.rm = TRUE))), na.rm = TRUE) +
+  geom_col(aes(x = REPORT_YEAR, y = (AN/sum(AN, na.rm = TRUE))), na.rm = TRUE) +
   labs(x = "Year", y = "Atromentis Necrosis") +
   theme_bw()
 # first appears 2006, weird pattern. starting in 2010, has alternating years of incidence and absence across all sites in GBR
@@ -1109,7 +1109,7 @@ an_p <- ggplot(gbr) +
 # could be explained that Atr has a quick recovery (all infected became healthy) or mortality (all infected died) period?
 
 us_p <- ggplot(gbr) +
-  geom_col(aes(x = REPORT_YEAR, y = (US/sum(US, na.rm = TRUE))), na.rm = TRUE) +
+  geom_col(aes(x = REPORT_YEAR, y = (U_SCAR/sum(U_SCAR, na.rm = TRUE))), na.rm = TRUE) +
   labs(x = "Year", y = "Unknown Scar") +
   theme_bw()
 # persists throughout all years examined in high abundance
@@ -1123,10 +1123,10 @@ ws_p + seb_p + br_p + bl_p + an_p + us_p + plot_annotation(title = "Disease Pres
 
 # Examine AN by site (this figure isn't really pretty but it gives me an initial look into what is going on with sites)
 ggplot(gbr) +
-  geom_jitter(aes(x = REPORT_YEAR, y = Atr, col = Site_ID)) +
+  geom_jitter(aes(x = REPORT_YEAR, y = AN, col = Site_ID)) +
   theme(legend.position = "none")
 # vast majority of sites at 0 incidence. transects where it is visible tend to be from the same sites, particularly in the period of intermittent data
-AtrSub <- subset(gbr, gbr$Atr > 0)
+AtrSub <- subset(gbr, gbr$AN > 0)
 print(unique(AtrSub$Site_ID)) # 44 sites
 Atr_Reef <- print(unique(AtrSub$FULLREEF_ID)) # 29 reefs
 print(unique(AtrSub$REEF_NAME))
@@ -1137,27 +1137,27 @@ ggplot(AtrSub) +
 
 # Examine all by site:
 ggplot(gbr) +
-  geom_jitter(aes(x = REPORT_YEAR, y = WS, col = Site_ID)) +
+  geom_jitter(aes(x = REPORT_YEAR, y = WHITESYNDROME, col = Site_ID)) +
   theme(legend.position = "none")
 # unable to discern anything of note here - will need to examine sites more closely
-WSSub <- subset(gbr, gbr$WS > 0)
+WSSub <- subset(gbr, gbr$WHITESYNDROME > 0)
 print(unique(WSSub$Site_ID)) # 297 sites
 print(unique(WSSub$FULLREEF_ID)) # 101 reefs
 
 ggplot(gbr) +
-  geom_jitter(aes(x = REPORT_YEAR, y = SEB, col = Site_ID)) +
+  geom_jitter(aes(x = REPORT_YEAR, y = SEB_DISEASE, col = Site_ID)) +
   theme(legend.position = "none")
 
 ggplot(gbr) +
-  geom_jitter(aes(x = REPORT_YEAR, y = Br, col = Site_ID)) +
+  geom_jitter(aes(x = REPORT_YEAR, y = BROWNB_DISEASE, col = Site_ID)) +
   theme(legend.position = "none")
 
 ggplot(gbr) +
-  geom_jitter(aes(x = REPORT_YEAR, y = BlB, col = Site_ID)) +
+  geom_jitter(aes(x = REPORT_YEAR, y = BLACKBAND, col = Site_ID)) +
   theme(legend.position = "none")
 
 ggplot(gbr) +
-  geom_jitter(aes(x = REPORT_YEAR, y = US, col = Site_ID)) +
+  geom_jitter(aes(x = REPORT_YEAR, y = U_SCAR, col = Site_ID)) +
   theme(legend.position = "none")
 # consistently a huge mess, seems to lose site abundance over last 3 years examined
 ```
